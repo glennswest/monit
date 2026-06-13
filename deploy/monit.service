@@ -1,0 +1,24 @@
+[Unit]
+Description=g8 framebuffer memory dashboard (pve + ai GPU host)
+After=network-online.target
+Wants=network-online.target
+# Take tty1 away from the login prompt while the dashboard owns the screen.
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/monit
+Restart=always
+RestartSec=3
+Environment=MONIT_AI_HOST=root@ai.g8.lo
+Environment=MONIT_PVE_LABEL=pve.g8.lo
+Environment=MONIT_AI_LABEL=ai.g8.lo
+Environment=MONIT_REFRESH=2
+Environment=MONIT_TOP=8
+# Needs /dev/fb0 and /dev/tty0; runs as root.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

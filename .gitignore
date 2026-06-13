@@ -1,0 +1,16 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Secrets and environment
+.env
+.env.*
+*.pem
+*.key
+
+# IDE and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
