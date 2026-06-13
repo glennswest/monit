@@ -2,15 +2,43 @@
 
 ## [Unreleased]
 
-### 2026-06-13
-- **feat:** Initial framebuffer memory dashboard (`monit`). Renders directly to
-  `/dev/fb0` on pve.g8.lo — no X/web. Shows RAM usage + top consumers for the
-  local host (pve) and the GPU host (ai.g8.lo, over SSH), plus per-GPU memory
-  and GPU process usage via `nvidia-smi`.
-- **feat:** Embedded Terminus PSF fonts (8×16 and 16×32) with a minimal
-  PSF1/PSF2 loader and integer-scaled bitmap text renderer.
-- **feat:** Takes the active VT into `KD_GRAPHICS` mode while running and
-  restores text mode on exit, so the console cursor never bleeds through.
-- **feat:** systemd unit (`deploy/monit.service`) that conflicts with
-  `getty@tty1` to own the attached display.
-- **chore:** Builds as a static `x86_64-unknown-linux-musl` binary on dev.g8.lo.
+## [v0.2.0] — 2026-06-13
+
+### Added
+- Rotating multi-page dashboard. Pages: **Memory**, **CPU**, **Temperatures**,
+  **Disk**, **AI workload**, **Kernel/log errors**. Rotation interval is
+  `MONIT_PAGE_SECS` (default 8s); a dot row in the title shows the active page.
+- Time-series **graphs** (area charts) with per-metric history ring buffers:
+  memory %, CPU %, hottest temperature, and GPU VRAM % / utilization %.
+- **CPU page**: overall busy %, load average, core count, history graph, and a
+  per-core utilization grid.
+- **Temperature page**: per-sensor bars (coretemp, nvme, GPU…) colored by temp,
+  hottest-temp history graph, and a **Fans / Pump (rpm)** block that flags any
+  0-rpm channel as `STOPPED` in red.
+- **Disk page**: pve Proxmox storages (via `pvesm status`) and ai filesystems
+  (via `df`) with usage bars.
+- **AI workload page**: running Docker containers, a derived **model** badge
+  (e.g. "Qwen 7B" from the training command / image), GPU VRAM/util/temp/power,
+  GPU VRAM & util history graphs, the running command line, and GPU processes.
+- **Kernel/log errors page**: recent `journalctl -p err` lines per host.
+- `MONIT_TEMP_UNIT=C|F` to display temperatures in Celsius or Fahrenheit.
+
+### Changed
+- Remote SSH collector extended to a single delimited blob carrying meminfo,
+  top procs, two `/proc/stat` samples, loadavg, hwmon temps + fans, `df`,
+  `docker ps`, `journalctl`, and `nvidia-smi` (now including temp + power).
+- Dropped the `°` glyph (absent from the embedded Terminus font) in favor of a
+  plain ` C` / ` F` suffix.
+
+## [v0.1.0] — 2026-06-13
+
+### Added
+- Initial framebuffer memory dashboard (`monit`). Renders directly to
+  `/dev/fb0` on pve.g8.lo — no X/web. RAM usage + top consumers for the local
+  host (pve) and the GPU host (ai.g8.lo, over SSH), plus per-GPU memory and GPU
+  process usage via `nvidia-smi`.
+- Embedded Terminus PSF fonts (8×16, 16×32) with a minimal PSF1/PSF2 loader and
+  integer-scaled bitmap text renderer.
+- VT `KD_GRAPHICS` takeover while running; text mode restored on exit.
+- systemd unit conflicting with `getty@tty1` to own the attached display.
+- Static `x86_64-unknown-linux-musl` build on dev.g8.lo.
