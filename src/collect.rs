@@ -39,6 +39,26 @@ pub struct Cpu {
     pub cores: usize,
 }
 
+/// CPU package power (RAPL) and clocks — the signals that distinguish "the AIO
+/// is removing heat" from "we're just holding power/clocks low".
+#[derive(Default, Clone)]
+pub struct Power {
+    pub pkg_w: f64,        // current package power draw (RAPL), 0 if unknown
+    pub pkg_limit_w: f64,  // RAPL long-term power cap, 0 if unknown
+    pub freq_mhz: u64,     // average current core frequency
+    pub freq_max_mhz: u64, // advertised max (turbo) frequency
+}
+
+impl Power {
+    /// Draw as a fraction of the configured power cap (0 if unknown).
+    pub fn frac(&self) -> f64 {
+        if self.pkg_limit_w <= 0.0 { 0.0 } else { (self.pkg_w / self.pkg_limit_w).clamp(0.0, 1.0) }
+    }
+    pub fn known(&self) -> bool {
+        self.pkg_w > 0.0
+    }
+}
+
 #[derive(Clone)]
 pub struct Proc {
     pub name: String,
@@ -77,27 +97,51 @@ pub struct Container {
     pub status: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Gpu {
     pub idx: u32,
     pub name: String,
     pub used_mb: u64,
     pub total_mb: u64,
-    pub util: u32,
+    pub util: u32,       // SM / graphics utilization %
+    pub mem_util: u32,   // memory-controller utilization %
     pub temp_c: f64,
+    pub mem_temp_c: f64, // memory junction temp (0 if N/A)
     pub power_w: f64,
+    pub power_limit_w: f64,
+    pub sm_clock: u32,   // MHz
+    pub mem_clock: u32,  // MHz
+    pub fan_pct: u32,    // 0 if N/A (datacenter GPUs have no fan tach here)
+    pub pstate: String,  // e.g. P0 (max) .. P8 (idle)
+    pub pcie_gen: u32,
+    pub pcie_width: u32,
+    pub throttle: Vec<String>, // decoded active throttle reasons
 }
 
 impl Gpu {
     pub fn frac(&self) -> f64 {
         if self.total_mb == 0 { 0.0 } else { self.used_mb as f64 / self.total_mb as f64 }
     }
+    /// Power draw as a fraction of the enforced limit (0 if unknown).
+    pub fn power_frac(&self) -> f64 {
+        if self.power_limit_w <= 0.0 { 0.0 } else { (self.power_w / self.power_limit_w).clamp(0.0, 1.0) }
+    }
+    /// True if a *capping* throttle is active (power/thermal), as opposed to
+    /// the benign idle reason.
+    pub fn throttled(&self) -> bool {
+        self.throttle.iter().any(|r| r != "Idle")
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct GpuProc {
+    pub pid: u32,
+    pub gpu_idx: u32,
     pub name: String,
-    pub mem_mb: u64,
+    pub mem_mb: u64, // resident GPU memory (from compute-apps)
+    pub sm: u32,     // SM utilization % (from pmon)
+    pub enc: u32,    // encoder utilization %
+    pub dec: u32,    // decoder utilization %
 }
 
 #[derive(Clone)]
@@ -107,6 +151,7 @@ pub struct Host {
     pub err: String,
     pub mem: Mem,
     pub cpu: Cpu,
+    pub power: Power,
     pub procs: Vec<Proc>,
     pub temps: Vec<Temp>,
     pub fans: Vec<Fan>,
@@ -127,6 +172,7 @@ impl Host {
             err: String::new(),
             mem: Mem::default(),
             cpu: Cpu::default(),
+            power: Power::default(),
             procs: vec![],
             temps: vec![],
             fans: vec![],
@@ -253,6 +299,32 @@ fn derive_model(cmds: &[String], containers: &[Container]) -> String {
     }
 }
 
+/// Parse an nvidia-smi numeric cell, treating "[N/A]"/"N/A"/"" as 0.
+fn nv_num<T: std::str::FromStr + Default>(s: &str) -> T {
+    let s = s.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("n/a") || s.starts_with('[') {
+        return T::default();
+    }
+    s.parse().unwrap_or_default()
+}
+
+/// Decode the clocks_throttle_reasons.active hex bitmask into human reasons.
+/// Only the meaningful bits are surfaced; "Idle" is benign (GPU not busy).
+fn decode_throttle(hex: &str) -> Vec<String> {
+    let h = hex.trim().trim_start_matches("0x").trim_start_matches("0X");
+    let bits = u64::from_str_radix(h, 16).unwrap_or(0);
+    let table: [(u64, &str); 7] = [
+        (0x0001, "Idle"),
+        (0x0004, "SW Power Cap"),
+        (0x0008, "HW Slowdown"),
+        (0x0020, "SW Thermal"),
+        (0x0040, "HW Thermal"),
+        (0x0080, "Power Brake"),
+        (0x0002, "App Clocks"),
+    ];
+    table.iter().filter(|(b, _)| bits & b != 0).map(|(_, n)| n.to_string()).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Local (pve) collection
 // ---------------------------------------------------------------------------
@@ -261,11 +333,15 @@ pub fn local(label: &str, top: usize) -> Host {
     let mut h = Host::new(label);
     h.mem = parse_meminfo(&fs::read_to_string("/proc/meminfo").unwrap_or_default());
 
+    let rapl = rapl_domain();
+    let e1 = rapl.as_ref().and_then(|d| read_u64(&d.energy));
     let s1 = parse_stat(&fs::read_to_string("/proc/stat").unwrap_or_default());
     std::thread::sleep(Duration::from_millis(SAMPLE_MS));
     let s2 = parse_stat(&fs::read_to_string("/proc/stat").unwrap_or_default());
+    let e2 = rapl.as_ref().and_then(|d| read_u64(&d.energy));
     let load = parse_loadavg(&fs::read_to_string("/proc/loadavg").unwrap_or_default());
     h.cpu = cpu_from_samples(&s1, &s2, load);
+    h.power = local_power(rapl.as_ref(), e1, e2, SAMPLE_MS);
 
     h.procs = local_procs();
     h.procs.sort_by(|a, b| b.rss_kb.cmp(&a.rss_kb));
@@ -278,6 +354,98 @@ pub fn local(label: &str, top: usize) -> Host {
 
     h.ok = h.mem.total_kb > 0;
     h
+}
+
+/// A RAPL "package" powercap domain discovered under /sys/class/powercap.
+/// Works for Intel (intel-rapl) and AMD (amd_energy via the same framework).
+struct RaplDomain {
+    energy: String,    // .../energy_uj
+    max_range: u64,    // .../max_energy_range_uj (for wrap handling)
+    limit_path: String, // .../constraint_0_power_limit_uw
+}
+
+fn read_u64(path: &str) -> Option<u64> {
+    fs::read_to_string(path).ok().and_then(|s| s.trim().parse().ok())
+}
+
+/// Find the top-level package power domain. Prefer one whose `name` starts with
+/// "package"; fall back to the first `*:0` domain that exposes energy_uj.
+fn rapl_domain() -> Option<RaplDomain> {
+    let dir = fs::read_dir("/sys/class/powercap").ok()?;
+    let mut fallback: Option<RaplDomain> = None;
+    for ent in dir.flatten() {
+        let base = ent.path();
+        let energy = base.join("energy_uj");
+        if !energy.exists() {
+            continue;
+        }
+        let name = fs::read_to_string(base.join("name")).unwrap_or_default().trim().to_string();
+        let dom = RaplDomain {
+            energy: energy.to_string_lossy().into_owned(),
+            max_range: read_u64(&base.join("max_energy_range_uj").to_string_lossy()).unwrap_or(0),
+            limit_path: base.join("constraint_0_power_limit_uw").to_string_lossy().into_owned(),
+        };
+        if name.starts_with("package") {
+            return Some(dom);
+        }
+        if fallback.is_none() {
+            fallback = Some(dom);
+        }
+    }
+    fallback
+}
+
+/// Compute package watts from two energy samples (handling counter wrap), and
+/// read the power cap + average/max core frequency.
+fn local_power(dom: Option<&RaplDomain>, e1: Option<u64>, e2: Option<u64>, ms: u64) -> Power {
+    let mut p = Power::default();
+    if let (Some(d), Some(a), Some(b)) = (dom, e1, e2) {
+        let delta_uj = if b >= a {
+            b - a
+        } else if d.max_range > 0 {
+            d.max_range - a + b // counter wrapped
+        } else {
+            0
+        };
+        let secs = ms as f64 / 1000.0;
+        if secs > 0.0 {
+            p.pkg_w = (delta_uj as f64 / 1_000_000.0) / secs;
+        }
+        if let Some(uw) = read_u64(&d.limit_path) {
+            p.pkg_limit_w = uw as f64 / 1_000_000.0;
+        }
+    }
+    let (sum, count, max) = cpu_freqs();
+    if count > 0 {
+        p.freq_mhz = sum / count as u64;
+    }
+    p.freq_max_mhz = max;
+    p
+}
+
+/// Sum/count of current per-core frequency (kHz→MHz) and the advertised max.
+fn cpu_freqs() -> (u64, usize, u64) {
+    let mut sum = 0u64;
+    let mut count = 0usize;
+    let mut max = 0u64;
+    if let Ok(dir) = fs::read_dir("/sys/devices/system/cpu") {
+        for ent in dir.flatten() {
+            let p = ent.path();
+            let fname = ent.file_name();
+            let name = fname.to_string_lossy();
+            if !(name.starts_with("cpu") && name[3..].chars().all(|c| c.is_ascii_digit()) && name.len() > 3) {
+                continue;
+            }
+            if let Some(khz) = read_u64(&p.join("cpufreq/scaling_cur_freq").to_string_lossy()) {
+                sum += khz / 1000;
+                count += 1;
+            }
+            if let Some(khz) = read_u64(&p.join("cpufreq/cpuinfo_max_freq").to_string_lossy()) {
+                max = max.max(khz / 1000);
+            }
+        }
+    }
+    (sum, count, max)
 }
 
 fn local_procs() -> Vec<Proc> {
@@ -471,9 +639,11 @@ docker ps --format '{{.Names}}|{{.Image}}|{{.Status}}' 2>/dev/null
 echo '@@LOG@@'
 journalctl -p err -b --no-pager -n 10 -o short 2>/dev/null
 echo '@@GPU@@'
-nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null
+nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu,utilization.memory,temperature.gpu,temperature.memory,power.draw,power.limit,clocks.sm,clocks.mem,fan.speed,pstate,pcie.link.gen.current,pcie.link.width.current,clocks_throttle_reasons.active --format=csv,noheader,nounits 2>/dev/null
 echo '@@GPUPROCS@@'
 nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null
+echo '@@GPUPMON@@'
+nvidia-smi pmon -c 1 2>/dev/null
 echo '@@GPUCMD@@'
 for pid in $(nvidia-smi --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null); do tr '\\0' ' ' < /proc/$pid/cmdline 2>/dev/null | cut -c1-180; echo; done";
 
@@ -529,6 +699,7 @@ fn parse_remote(h: &mut Host, text: &str, top: usize) {
             "@@LOG@@" => { sec = "LOG"; continue; }
             "@@GPU@@" => { sec = "GPU"; continue; }
             "@@GPUPROCS@@" => { sec = "GPUPROCS"; continue; }
+            "@@GPUPMON@@" => { sec = "GPUPMON"; continue; }
             "@@GPUCMD@@" => { sec = "GPUCMD"; continue; }
             _ => {}
         }
@@ -580,22 +751,75 @@ fn parse_remote(h: &mut Host, text: &str, top: usize) {
             "LOG" => { if !line.trim().is_empty() { h.logs.push(clip(line, 86)); } }
             "GPU" => {
                 let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
-                if f.len() >= 7 {
+                // index,name,mem.used,mem.total,util.gpu,util.mem,temp.gpu,
+                // temp.mem,power.draw,power.limit,clocks.sm,clocks.mem,fan,
+                // pstate,pcie.gen,pcie.width,throttle
+                if f.len() >= 17 {
                     h.gpus.push(Gpu {
-                        idx: f[0].parse().unwrap_or(0),
+                        idx: nv_num(f[0]),
                         name: f[1].to_string(),
-                        used_mb: f[2].parse().unwrap_or(0),
-                        total_mb: f[3].parse().unwrap_or(0),
-                        util: f[4].parse().unwrap_or(0),
-                        temp_c: f[5].parse().unwrap_or(0.0),
-                        power_w: f[6].parse().unwrap_or(0.0),
+                        used_mb: nv_num(f[2]),
+                        total_mb: nv_num(f[3]),
+                        util: nv_num(f[4]),
+                        mem_util: nv_num(f[5]),
+                        temp_c: nv_num(f[6]),
+                        mem_temp_c: nv_num(f[7]),
+                        power_w: nv_num(f[8]),
+                        power_limit_w: nv_num(f[9]),
+                        sm_clock: nv_num(f[10]),
+                        mem_clock: nv_num(f[11]),
+                        fan_pct: nv_num(f[12]),
+                        pstate: f[13].trim().to_string(),
+                        pcie_gen: nv_num(f[14]),
+                        pcie_width: nv_num(f[15]),
+                        throttle: decode_throttle(f[16]),
+                    });
+                } else if f.len() >= 7 {
+                    // Fallback for older nvidia-smi lacking some fields.
+                    h.gpus.push(Gpu {
+                        idx: nv_num(f[0]),
+                        name: f[1].to_string(),
+                        used_mb: nv_num(f[2]),
+                        total_mb: nv_num(f[3]),
+                        util: nv_num(f[4]),
+                        temp_c: nv_num(f[5]),
+                        power_w: nv_num(f[6]),
+                        ..Gpu::default()
                     });
                 }
             }
             "GPUPROCS" => {
                 let f: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
                 if f.len() >= 3 {
-                    h.gpu_procs.push(GpuProc { name: tidy_name(f[1]), mem_mb: f[2].parse().unwrap_or(0) });
+                    h.gpu_procs.push(GpuProc {
+                        pid: nv_num(f[0]),
+                        name: tidy_name(f[1]),
+                        mem_mb: nv_num(f[2]),
+                        ..GpuProc::default()
+                    });
+                }
+            }
+            "GPUPMON" => {
+                // # gpu  pid  type  sm  mem  enc  dec  ...  command
+                if line.trim_start().starts_with('#') { continue; }
+                let f: Vec<&str> = line.split_whitespace().collect();
+                if f.len() >= 7 {
+                    if let Ok(pid) = f[1].parse::<u32>() {
+                        let gpu_idx: u32 = nv_num(f[0]);
+                        let sm: u32 = nv_num(f[3]);
+                        let enc: u32 = nv_num(f[5]);
+                        let dec: u32 = nv_num(f[6]);
+                        let name = tidy_name(f.last().unwrap_or(&""));
+                        if let Some(p) = h.gpu_procs.iter_mut().find(|p| p.pid == pid) {
+                            p.gpu_idx = gpu_idx;
+                            p.sm = sm;
+                            p.enc = enc;
+                            p.dec = dec;
+                            if p.name.is_empty() || p.name == "-" { p.name = name; }
+                        } else if pid != 0 {
+                            h.gpu_procs.push(GpuProc { pid, gpu_idx, name, sm, enc, dec, ..GpuProc::default() });
+                        }
+                    }
                 }
             }
             "GPUCMD" => { if !line.trim().is_empty() { h.workload.push(clip(line.trim(), 120)); } }
@@ -606,6 +830,7 @@ fn parse_remote(h: &mut Host, text: &str, top: usize) {
     h.cpu = cpu_from_samples(&parse_stat(&stat1), &parse_stat(&stat2), load);
     h.procs.truncate(top);
     sort_temps(&mut h.temps);
-    h.gpu_procs.sort_by(|a, b| b.mem_mb.cmp(&a.mem_mb));
+    // Busiest first: SM utilization, then resident GPU memory.
+    h.gpu_procs.sort_by(|a, b| b.sm.cmp(&a.sm).then(b.mem_mb.cmp(&a.mem_mb)));
     h.gpu_procs.truncate(top);
 }
