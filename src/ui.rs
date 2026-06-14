@@ -39,18 +39,21 @@ pub enum Page {
     Cpu,
     Temp,
     Disk,
+    Gpu,
     Ai,
     Logs,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [Page::Mem, Page::Cpu, Page::Temp, Page::Disk, Page::Ai, Page::Logs];
+    pub const ALL: [Page; 7] =
+        [Page::Mem, Page::Cpu, Page::Temp, Page::Disk, Page::Gpu, Page::Ai, Page::Logs];
     fn title(self) -> &'static str {
         match self {
             Page::Mem => "MEMORY",
             Page::Cpu => "CPU",
             Page::Temp => "TEMPERATURES",
             Page::Disk => "DISK",
+            Page::Gpu => "GPU",
             Page::Ai => "AI WORKLOAD",
             Page::Logs => "KERNEL / LOG ERRORS",
         }
@@ -127,6 +130,11 @@ pub fn render(fb: &mut Fb, f: &Fonts, page: Page, pve: &Host, ai: &Host, hist: &
     let rx = margin + pw as isize + gap;
 
     match page {
+        Page::Gpu => {
+            let fw = (w - 2 * margin) as usize;
+            panel_bg(fb, lx, top, fw, h);
+            gpu_page(fb, f, lx + 26, top + 26, fw as isize - 52, h as isize - 52, ai, hist);
+        }
         Page::Ai => {
             let fw = (w - 2 * margin) as usize;
             panel_bg(fb, lx, top, fw, h);
@@ -251,6 +259,16 @@ fn cpu_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, hos
     fb.bar(ix, cy, iw as usize, 26, frac, clr, TRACK, BORDER);
     cy += 34;
     fb.text(&f.small, ix, cy, 1, DIM, &format!("load  {:.2}  {:.2}  {:.2}", c.load[0], c.load[1], c.load[2]));
+    if host.power.known() {
+        let mut s = format!("pkg {:.0} W", host.power.pkg_w);
+        if host.power.pkg_limit_w > 0.0 {
+            s.push_str(&format!(" / {:.0} W cap", host.power.pkg_limit_w));
+        }
+        if host.power.freq_mhz > 0 {
+            s.push_str(&format!("   {:.2} GHz", host.power.freq_mhz as f64 / 1000.0));
+        }
+        fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &s), cy, 1, DIM, &s);
+    }
     cy += 24;
     fb.graph(ix, cy, iw as usize, 92, series, clr, GRID, TRACK, BORDER);
     cy += 92 + 16;
@@ -287,6 +305,11 @@ fn temp_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, ho
         Some(v) => v,
         None => return,
     };
+    // AIO / CPU-thermal verdict (local host only — it's where RAPL power reads).
+    if host.power.known() {
+        cy = aio_block(fb, f, ix, cy, iw, host);
+        cy += 8;
+    }
     // GPU temp first (highlighted) if present.
     for g in &host.gpus {
         cy = temp_row(fb, f, ix, cy, iw, &format!("GPU {}", g.idx), g.temp_c, GPU_CLR);
@@ -324,6 +347,65 @@ fn temp_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, ho
     fb.graph(ix, cy, iw as usize, gh, series, RED, GRID, TRACK, BORDER);
 }
 
+/// AIO / CPU-thermal panel: package power vs cap, average clock, pump RPM, and
+/// a verdict that separates "the cooler is removing real heat" from "we're just
+/// holding power/clocks down". Returns the new y cursor.
+fn aio_block(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: isize, host: &crate::collect::Host) -> isize {
+    let p = &host.power;
+    let t = host.max_temp();
+    let pump = host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump"));
+    let pump_rpm = pump.map(|f| f.rpm);
+    let frac = p.frac(); // draw / cap (0 if no cap known)
+
+    fb.text(&f.small, x, y, 1, DIM, "AIO / CPU THERMAL");
+    // Package power figure on the right of the caption.
+    let pwr = if p.pkg_limit_w > 0.0 {
+        format!("{:.0} / {:.0} W  ({:.0}% cap)", p.pkg_w, p.pkg_limit_w, frac * 100.0)
+    } else {
+        format!("{:.0} W", p.pkg_w)
+    };
+    fb.text(&f.small, x + w - Fb::text_w(&f.small, 1, &pwr), y, 1, TEXT, &pwr);
+    let mut cy = y + 22;
+    // Power-draw bar (vs cap when known, else vs a 250 W reference scale).
+    let bar_frac = if p.pkg_limit_w > 0.0 { frac } else { (p.pkg_w / 250.0).clamp(0.0, 1.0) };
+    fb.bar(x, cy, w as usize, 16, bar_frac, POWER_CLR, TRACK, BORDER);
+    cy += 24;
+    // Clock + pump line.
+    let mut info = format!("clock {:.2} GHz", p.freq_mhz as f64 / 1000.0);
+    if p.freq_max_mhz > 0 {
+        info.push_str(&format!(" / {:.2} max", p.freq_max_mhz as f64 / 1000.0));
+    }
+    match pump_rpm {
+        Some(0) => info.push_str("    pump STOPPED"),
+        Some(r) => info.push_str(&format!("    pump {} rpm", r)),
+        None => {}
+    }
+    fb.text(&f.small, x, cy, 1, DIM, &info);
+    cy += 22;
+    // Verdict.
+    let (clr, verdict) = aio_verdict(p, t, pump_rpm);
+    fb.text(&f.small, x, cy, 1, clr, &verdict);
+    cy + 22
+}
+
+/// Heuristic verdict from package power, temperature and pump RPM.
+fn aio_verdict(p: &crate::collect::Power, t: f64, pump_rpm: Option<u64>) -> (Color, String) {
+    if pump_rpm == Some(0) {
+        return (RED, "PUMP STOPPED — AIO not circulating coolant".to_string());
+    }
+    let frac = p.frac();
+    let has_cap = p.pkg_limit_w > 0.0;
+    // High sustained draw held at a safe temperature ⇒ the cooler is working.
+    if p.pkg_w >= 90.0 && t > 0.0 && t < 85.0 && (!has_cap || frac >= 0.6) {
+        return (GREEN, format!("AIO COOLING — dissipating {:.0} W, held at {}", p.pkg_w, fmt_temp(t)));
+    }
+    // Low draw ⇒ temps are low because there's little heat, not because of cooling.
+    if (has_cap && frac < 0.35) || (!has_cap && p.pkg_w < 60.0) {
+        return (YELLOW, format!("POWER-LIMITED — only {:.0} W draw; low heat, cooling not stressed", p.pkg_w));
+    }
+    (ACCENT, format!("nominal — {:.0} W at {}", p.pkg_w, fmt_temp(t)))
+}
+
 fn temp_row(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: isize, label: &str, c: f64, label_clr: Color) -> isize {
     fb.text(&f.small, x, y, 1, label_clr, label);
     let val = fmt_temp(c);
@@ -359,6 +441,156 @@ fn disk_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, ho
             break;
         }
     }
+}
+
+// --------------------------------------------------------------------------
+// GPU page (single wide panel) — what the accelerators are actually doing.
+// --------------------------------------------------------------------------
+
+const POWER_CLR: Color = rgb(255, 170, 60);
+
+fn gpu_page(fb: &mut Fb, f: &Fonts, ix: isize, iy: isize, iw: isize, ih: isize, host: &Host, hist: &History) {
+    let dot = if host.ok { GREEN } else { RED };
+    fb.rect(ix, iy + 6, 16, 16, dot);
+    fb.text(&f.big, ix + 28, iy, 1, TEXT, &format!("{}  ·  GPU compute", host.label));
+    let mut cy = iy + 48;
+    if !host.ok {
+        fb.text(&f.small, ix, cy + 16, 2, RED, "OFFLINE");
+        let msg = if host.err.is_empty() { "unreachable" } else { &host.err };
+        fb.text(&f.small, ix, cy + 56, 1, DIM, msg);
+        return;
+    }
+    if host.gpus.is_empty() {
+        fb.text(&f.small, ix, cy + 8, 1, DIM, "no NVIDIA GPU detected (nvidia-smi returned nothing)");
+        return;
+    }
+
+    // Detailed block for the primary one or two GPUs.
+    for g in host.gpus.iter().take(2) {
+        cy = gpu_block(fb, f, ix, cy, iw, g);
+        cy += 10;
+    }
+    // Any GPUs beyond the first two get a one-line compact summary.
+    for g in host.gpus.iter().skip(2) {
+        let s = format!(
+            "GPU {}  {:>3}% util  {:>3}% vram  {:.0}W  {}",
+            g.idx, g.util, (g.frac() * 100.0) as u32, g.power_w, fmt_temp(g.temp_c)
+        );
+        fb.text(&f.small, ix, cy, 1, DIM, &s);
+        cy += 20;
+    }
+
+    // History graphs for the primary GPU: utilization, VRAM, power, temp.
+    cy += 6;
+    let cols = 4isize;
+    let ggap = 24isize;
+    let gw = ((iw - ggap * (cols - 1)) / cols) as usize;
+    let labels = ["SM UTIL %", "VRAM %", "POWER % CAP", "TEMP"];
+    let series = [
+        hist.gpu_util.slice(),
+        hist.gpu_mem.slice(),
+        hist.gpu_power.slice(),
+        hist.gpu_temp.slice(),
+    ];
+    let clrs = [ACCENT, GPU_CLR, POWER_CLR, RED];
+    for i in 0..cols {
+        let gx = ix + i * (gw as isize + ggap);
+        fb.text(&f.small, gx, cy, 1, DIM, labels[i as usize]);
+    }
+    cy += 20;
+    let gh = 130usize;
+    for i in 0..cols {
+        let gx = ix + i * (gw as isize + ggap);
+        fb.graph(gx, cy, gw, gh, &series[i as usize], clrs[i as usize], GRID, TRACK, BORDER);
+    }
+    cy += gh as isize + 22;
+
+    // Per-process compute table: SM utilization and resident VRAM.
+    fb.text(&f.small, ix, cy, 1, DIM, "COMPUTE PROCESSES");
+    let hdr = "SM%      VRAM";
+    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, hdr), cy, 1, DIM, hdr);
+    cy += 24;
+    if host.gpu_procs.is_empty() {
+        fb.text(&f.small, ix, cy, 1, DIM, "idle — no compute processes");
+        return;
+    }
+    for gp in &host.gpu_procs {
+        if cy > iy + ih - 24 {
+            break;
+        }
+        let label = if host.gpus.len() > 1 {
+            format!("g{} {} [{}]", gp.gpu_idx, gp.name, gp.pid)
+        } else {
+            format!("{} [{}]", gp.name, gp.pid)
+        };
+        fb.text(&f.small, ix, cy, 1, GPU_CLR, &label);
+        // SM bar + values, right-aligned.
+        let mem = if gp.mem_mb > 0 { format!("{:.1}G", gp.mem_mb as f64 / 1024.0) } else { "—".to_string() };
+        let val = format!("{:>3}%   {:>6}", gp.sm, mem);
+        fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &val), cy, 1, TEXT, &val);
+        let bw = 160usize;
+        fb.bar(ix + iw - bw as isize - 230, cy + 1, bw, 12, gp.sm as f64 / 100.0, level_color(gp.sm as f64 / 100.0), TRACK, BORDER);
+        cy += 22;
+    }
+}
+
+/// A detailed single-GPU block: utilization headline + util/VRAM/power bars and
+/// a clocks/fan/throttle status line. Returns the new y cursor.
+fn gpu_block(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: isize, g: &Gpu) -> isize {
+    // Header: id + name on the left; pstate + PCIe link on the right.
+    let head = format!("GPU {}  {}", g.idx, g.name);
+    fb.text(&f.small, x, y, 1, GPU_CLR, &head);
+    let mut right = String::new();
+    if !g.pstate.is_empty() { right.push_str(&g.pstate); }
+    if g.pcie_gen > 0 { right.push_str(&format!("  PCIe {}x{}", g.pcie_gen, g.pcie_width)); }
+    fb.text(&f.small, x + w - Fb::text_w(&f.small, 1, &right), y, 1, DIM, &right);
+    let mut cy = y + 24;
+
+    // Utilization headline + clocks.
+    let uclr = level_color(g.util as f64 / 100.0);
+    fb.text(&f.big, x, cy, 1, uclr, &format!("{:>3}% SM", g.util));
+    let clk = format!("sm {} / mem {} MHz   mem-ctl {}%", g.sm_clock, g.mem_clock, g.mem_util);
+    fb.text(&f.small, x + w - Fb::text_w(&f.small, 1, &clk), cy + 8, 1, DIM, &clk);
+    cy += 38;
+    fb.bar(x, cy, w as usize, 22, g.util as f64 / 100.0, uclr, TRACK, BORDER);
+    cy += 30;
+
+    // Three side-by-side meters: VRAM, power, temperature.
+    let gap = 24isize;
+    let cw = (w - 2 * gap) / 3;
+    meter(fb, f, x, cy, cw, "VRAM", g.frac(), level_color(g.frac()),
+          &format!("{:.1}/{:.1}G", g.used_mb as f64 / 1024.0, g.total_mb as f64 / 1024.0));
+    let plabel = if g.power_limit_w > 0.0 {
+        format!("{:.0}/{:.0}W", g.power_w, g.power_limit_w)
+    } else {
+        format!("{:.0}W", g.power_w)
+    };
+    meter(fb, f, x + cw + gap, cy, cw, "POWER", g.power_frac(), POWER_CLR, &plabel);
+    let tlabel = if g.mem_temp_c > 0.0 {
+        format!("{} mem {}", fmt_temp(g.temp_c), fmt_temp(g.mem_temp_c))
+    } else {
+        fmt_temp(g.temp_c)
+    };
+    meter(fb, f, x + 2 * (cw + gap), cy, cw, "TEMP", temp_frac(g.temp_c), temp_color(g.temp_c), &tlabel);
+    cy += 56;
+
+    // Throttle / fan status line.
+    let fan = if g.fan_pct > 0 { format!("fan {}%", g.fan_pct) } else { String::new() };
+    if g.throttled() {
+        let s = format!("THROTTLING: {}   {}", g.throttle.join(", "), fan);
+        fb.text(&f.small, x, cy, 1, RED, s.trim());
+    } else {
+        let s = format!("no throttling   {}", fan);
+        fb.text(&f.small, x, cy, 1, GREEN, s.trim());
+    }
+    cy + 22
+}
+
+/// A small labelled meter: caption, bar, and a value string underneath.
+fn meter(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: isize, cap: &str, frac: f64, clr: Color, val: &str) {
+    fb.text(&f.small, x, y, 1, DIM, cap);
+    fb.text(&f.small, x + w - Fb::text_w(&f.small, 1, val), y, 1, TEXT, val);
+    fb.bar(x, y + 20, w as usize, 18, frac, clr, TRACK, BORDER);
 }
 
 // --------------------------------------------------------------------------
