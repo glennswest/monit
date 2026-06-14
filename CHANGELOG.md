@@ -33,6 +33,12 @@
   input is bounded (body/widget/series size caps). New deps: `serde`,
   `serde_json`.
 - Config keys `api_bind` / `api_token` (env: `MONIT_API_BIND` / `MONIT_API_TOKEN`).
+- **Power-control endpoint** `/api/v1/power` (gated by `api_control`, default on):
+  `GET` reports live draw + cap + bounds; `POST` caps the CPU package power via
+  RAPL — `{"limit_w":80}`, `{"scale":0.5}` (halve the current cap), or
+  `{"restore":true}` (back to the cap captured at startup). Built for UPS-overload
+  events; monit runs as root so it applies the cap directly. New caps clamp to the
+  domain's min/max. Config `api_control` (env `MONIT_API_CONTROL`).
 
 ### Changed
 - Page rotation now spans built-in **and** live app-pushed pages; the page-dot

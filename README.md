@@ -50,6 +50,47 @@ here means no hostnames are baked into the binary or committed to the repo.
 | `page_secs` | `MONIT_PAGE_SECS` | `8` | Seconds per page before rotating |
 | `top` | `MONIT_TOP` | `8` | Rows of top consumers per host |
 | `temp_unit` | `MONIT_TEMP_UNIT` | `C` | Temperature unit: `C` or `F` |
+| `api_bind` | `MONIT_API_BIND` | `0.0.0.0:9090` | REST API listen address (`off` disables) |
+| `api_token` | `MONIT_API_TOKEN` | _(unset)_ | Optional bearer token for `/api/v1/*` |
+| `api_control` | `MONIT_API_CONTROL` | `true` | Enable the `/api/v1/power` throttle endpoint |
+
+## REST API
+
+monit serves a small HTTP API (default `0.0.0.0:9090`) for two things:
+
+**App-pushed pages** — external apps add their own pages to the rotation by
+posting a declarative page (a title plus widgets: `heading`, `text`, `bar`,
+`graph`, `table`). Pages expire on a TTL (default 60s; re-POST to refresh):
+
+```sh
+curl -s localhost:9090/api/v1/pages -d '{
+  "id": "ingest", "title": "Ingest Pipeline", "ttl_secs": 30,
+  "widgets": [
+    {"type":"heading","text":"Queues"},
+    {"type":"bar","label":"backlog","frac":0.42,"value":"4.2k msgs"},
+    {"type":"graph","label":"throughput/s","series":[10,12,9,15,22,18]},
+    {"type":"table","columns":["worker","lag"],"rows":[["w1","0.2s"],["w2","1.1s"]]}
+  ]
+}'
+
+curl -s localhost:9090/api/v1/pages            # list
+curl -s -X DELETE localhost:9090/api/v1/pages/ingest
+```
+
+Colors are names (`green`/`yellow`/`red`/`accent`/`gpu`/`power`/`dim`/`text`) or
+`#rrggbb`. If a token is set, send `Authorization: Bearer <token>`.
+
+**Power control** (`/api/v1/power`, gated by `api_control`) — cap or restore the
+CPU package power via RAPL, e.g. during a UPS overload (monit runs as root):
+
+```sh
+curl -s localhost:9090/api/v1/power                       # draw, cap, bounds
+curl -s localhost:9090/api/v1/power -d '{"scale":0.5}'    # halve the cap now
+curl -s localhost:9090/api/v1/power -d '{"limit_w":80}'   # cap to 80 W
+curl -s localhost:9090/api/v1/power -d '{"restore":true}' # back to startup cap
+```
+
+`GET /healthz` is an unauthenticated liveness check.
 
 ## Build
 

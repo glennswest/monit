@@ -33,3 +33,8 @@ api_bind = 0.0.0.0:9090
 # (the /healthz endpoint never requires auth). Leave unset for an open,
 # LAN-trusted API.
 #api_token = change-me
+
+# Enable the power-control endpoint (/api/v1/power) that caps/restores the CPU
+# package power via RAPL — useful during UPS overload. monit runs as root so it
+# can apply the cap directly. Strongly pair this with api_token. Default: true.
+api_control = true

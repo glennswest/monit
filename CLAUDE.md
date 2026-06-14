@@ -54,8 +54,20 @@ real hostnames or IPs in the source or committed docs.** The repo is public.
   (green/yellow/red/accent/gpu/power/dim/text) or `#rrggbb`.
 - `GET /api/v1/pages` — list; `GET /api/v1/pages/{id}` — echo; `DELETE` — remove.
 - `GET /healthz` — liveness (no auth). `ttl_secs:0` = never expire; default 60s.
+- `GET/POST /api/v1/power` — RAPL CPU package power control (gated by
+  `api_control`, default on). POST `{limit_w}`, `{scale}`, or `{restore:true}`.
+  Used for UPS-overload throttling; clamps to the domain min/max.
 - Bind via `api_bind` (default `0.0.0.0:9090`, `off` disables); optional
   `api_token` bearer.
+
+## Build note (macOS cross)
+- On the dev mac, the host linker can't emit a Linux static binary. A musl
+  cross-linker is installed (`x86_64-linux-musl-gcc`, Homebrew). Build with:
+  `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \`
+  `CC_x86_64_unknown_linux_musl=x86_64-linux-musl-gcc \`
+  `cargo build --release --target x86_64-unknown-linux-musl`
+  (On a native x86_64 Linux build host, plain `cargo build --release --target
+  x86_64-unknown-linux-musl` works as before.)
 
 ## Notes / gotchas
 - ioctl request arg type differs by libc (c_int on musl) — cast `KDSETMODE as _`.

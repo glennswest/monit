@@ -14,6 +14,7 @@
 //!   DELETE /api/v1/pages/{id}   remove a page
 //!   GET    /healthz             liveness (never requires auth)
 
+use crate::collect;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -117,8 +118,17 @@ pub fn active_ids(store: &Store, now: Instant) -> Vec<String> {
 // ---------------------------------------------------------------------------
 
 pub struct ApiConfig {
-    pub bind: String,         // e.g. "0.0.0.0:9090"; empty/"off" disables
-    pub token: Option<String>, // optional bearer token
+    pub bind: String,           // e.g. "0.0.0.0:9090"; empty/"off" disables
+    pub token: Option<String>,  // optional bearer token
+    pub allow_control: bool,    // enable the /power throttle endpoint
+    pub orig_cap_uw: Option<u64>, // package power cap captured at startup (for restore)
+}
+
+/// Shared, immutable-after-startup server context handed to each connection.
+struct Ctx {
+    token: Option<String>,
+    allow_control: bool,
+    orig_cap_uw: Option<u64>,
 }
 
 /// Spawn the API server in a background thread. Returns immediately; on bind
@@ -136,13 +146,17 @@ pub fn serve(cfg: ApiConfig, store: Store) {
             }
         };
         eprintln!("monit: API listening on {}", cfg.bind);
-        let token = Arc::new(cfg.token);
+        let ctx = Arc::new(Ctx {
+            token: cfg.token,
+            allow_control: cfg.allow_control,
+            orig_cap_uw: cfg.orig_cap_uw,
+        });
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
             let store = store.clone();
-            let token = token.clone();
+            let ctx = ctx.clone();
             std::thread::spawn(move || {
-                let _ = handle(stream, &store, token.as_ref().as_ref());
+                let _ = handle(stream, &store, &ctx);
             });
         }
     });
@@ -155,7 +169,7 @@ struct Request {
     body: Vec<u8>,
 }
 
-fn handle(mut stream: TcpStream, store: &Store, token: Option<&String>) -> std::io::Result<()> {
+fn handle(mut stream: TcpStream, store: &Store, ctx: &Ctx) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let req = match read_request(&mut stream)? {
         Some(r) => r,
@@ -168,7 +182,7 @@ fn handle(mut stream: TcpStream, store: &Store, token: Option<&String>) -> std::
     }
 
     // Optional bearer-token gate on everything else.
-    if let Some(tok) = token {
+    if let Some(tok) = &ctx.token {
         let ok = req
             .auth
             .as_deref()
@@ -181,6 +195,18 @@ fn handle(mut stream: TcpStream, store: &Store, token: Option<&String>) -> std::
     }
 
     let path = req.path.clone();
+    // Power / throttle control.
+    if path == "/api/v1/power" {
+        if !ctx.allow_control {
+            return respond(&mut stream, 403, "application/json", br#"{"error":"control disabled (set api_control = true)"}"#);
+        }
+        return match req.method.as_str() {
+            "GET" => get_power(&mut stream),
+            "POST" => post_power(&mut stream, ctx, &req.body),
+            _ => respond(&mut stream, 404, "application/json", br#"{"error":"not found"}"#),
+        };
+    }
+
     let rest = path.strip_prefix("/api/v1/pages");
     match (req.method.as_str(), rest) {
         ("POST", Some("")) | ("POST", Some("/")) => post_page(&mut stream, store, &req.body),
@@ -188,6 +214,72 @@ fn handle(mut stream: TcpStream, store: &Store, token: Option<&String>) -> std::
         ("GET", Some(p)) => get_page(&mut stream, store, p.trim_start_matches('/')),
         ("DELETE", Some(p)) => delete_page(&mut stream, store, p.trim_start_matches('/')),
         _ => respond(&mut stream, 404, "application/json", br#"{"error":"not found"}"#),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Power / throttle control (CPU package RAPL cap on the local host)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct PowerReq {
+    #[serde(default)]
+    limit_w: Option<f64>, // set the cap to this many watts
+    #[serde(default)]
+    scale: Option<f64>, // multiply the *current* cap by this factor (e.g. 0.5)
+    #[serde(default)]
+    restore: Option<bool>, // restore the startup cap (or the domain max)
+}
+
+fn get_power(stream: &mut TcpStream) -> std::io::Result<()> {
+    let cap = match collect::power_cap() {
+        Some(c) => c,
+        None => return respond(stream, 503, "application/json", br#"{"error":"no RAPL package domain"}"#),
+    };
+    let draw = collect::power_draw_w(200);
+    let body = serde_json::json!({
+        "draw_w": draw,
+        "limit_w": cap.cur_uw as f64 / 1e6,
+        "min_w": cap.min_uw as f64 / 1e6,
+        "max_w": cap.max_uw as f64 / 1e6,
+    });
+    respond(stream, 200, "application/json", &serde_json::to_vec(&body).unwrap_or_default())
+}
+
+fn post_power(stream: &mut TcpStream, ctx: &Ctx, body: &[u8]) -> std::io::Result<()> {
+    let req: PowerReq = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!(r#"{{"error":"invalid json: {}"}}"#, escape(&e.to_string()));
+            return respond(stream, 400, "application/json", msg.as_bytes());
+        }
+    };
+    let cap = match collect::power_cap() {
+        Some(c) => c,
+        None => return respond(stream, 503, "application/json", br#"{"error":"no RAPL package domain"}"#),
+    };
+    let target_uw = if req.restore.unwrap_or(false) {
+        ctx.orig_cap_uw.unwrap_or(cap.max_uw)
+    } else if let Some(w) = req.limit_w {
+        (w * 1e6).max(0.0) as u64
+    } else if let Some(s) = req.scale {
+        (cap.cur_uw as f64 * s.max(0.0)) as u64
+    } else {
+        return respond(stream, 400, "application/json", br#"{"error":"specify limit_w, scale, or restore"}"#);
+    };
+    match cap.set(target_uw) {
+        Ok(applied) => {
+            let body = serde_json::json!({
+                "ok": true,
+                "limit_w": applied as f64 / 1e6,
+                "previous_w": cap.cur_uw as f64 / 1e6,
+            });
+            respond(stream, 200, "application/json", &serde_json::to_vec(&body).unwrap_or_default())
+        }
+        Err(e) => {
+            let msg = format!(r#"{{"error":"write failed: {}"}}"#, escape(&e.to_string()));
+            respond(stream, 500, "application/json", msg.as_bytes())
+        }
     }
 }
 

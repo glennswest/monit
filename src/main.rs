@@ -55,12 +55,16 @@ fn main() {
     let unit = cfg.string("temp_unit", "MONIT_TEMP_UNIT", "C");
     ui::FAHRENHEIT.store(unit.eq_ignore_ascii_case("F"), std::sync::atomic::Ordering::Relaxed);
 
-    // REST API for app-pushed pages. Empty/"off" bind disables it.
+    // REST API for app-pushed pages + power control. Empty/"off" bind disables.
     let store = api::new_store();
+    let allow_control = cfg.parse("api_control", "MONIT_API_CONTROL", true);
+    let orig_cap_uw = collect::power_cap().map(|c| c.cur_uw);
     api::serve(
         api::ApiConfig {
             bind: cfg.string("api_bind", "MONIT_API_BIND", "0.0.0.0:9090"),
             token: cfg.opt("api_token", "MONIT_API_TOKEN"),
+            allow_control,
+            orig_cap_uw,
         },
         store.clone(),
     );

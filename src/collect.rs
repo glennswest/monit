@@ -359,8 +359,9 @@ pub fn local(label: &str, top: usize) -> Host {
 /// A RAPL "package" powercap domain discovered under /sys/class/powercap.
 /// Works for Intel (intel-rapl) and AMD (amd_energy via the same framework).
 struct RaplDomain {
-    energy: String,    // .../energy_uj
-    max_range: u64,    // .../max_energy_range_uj (for wrap handling)
+    base: String,       // the domain directory
+    energy: String,     // .../energy_uj
+    max_range: u64,     // .../max_energy_range_uj (for wrap handling)
     limit_path: String, // .../constraint_0_power_limit_uw
 }
 
@@ -381,6 +382,7 @@ fn rapl_domain() -> Option<RaplDomain> {
         }
         let name = fs::read_to_string(base.join("name")).unwrap_or_default().trim().to_string();
         let dom = RaplDomain {
+            base: base.to_string_lossy().into_owned(),
             energy: energy.to_string_lossy().into_owned(),
             max_range: read_u64(&base.join("max_energy_range_uj").to_string_lossy()).unwrap_or(0),
             limit_path: base.join("constraint_0_power_limit_uw").to_string_lossy().into_owned(),
@@ -393,6 +395,58 @@ fn rapl_domain() -> Option<RaplDomain> {
         }
     }
     fallback
+}
+
+// ---------------------------------------------------------------------------
+// CPU package power *control* (RAPL) — used by the REST throttle endpoint.
+// monit runs as root on the hypervisor, so it can adjust the package power cap
+// directly. All values are microwatts (µW), matching the sysfs interface.
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+pub struct PowerCap {
+    pub cur_uw: u64,
+    pub min_uw: u64,
+    pub max_uw: u64,
+    path: String,
+}
+
+impl PowerCap {
+    /// Apply a new package power cap, clamped to the domain's [min, max].
+    pub fn set(&self, uw: u64) -> std::io::Result<u64> {
+        let lo = if self.min_uw > 0 { self.min_uw } else { 1_000_000 };
+        let hi = if self.max_uw > 0 { self.max_uw } else { u64::MAX };
+        let clamped = uw.clamp(lo, hi);
+        fs::write(&self.path, clamped.to_string())?;
+        Ok(clamped)
+    }
+}
+
+/// Read the current package power cap and the domain's constraint bounds.
+pub fn power_cap() -> Option<PowerCap> {
+    let dom = rapl_domain()?;
+    let cur = read_u64(&dom.limit_path)?;
+    let max = read_u64(&format!("{}/constraint_0_max_power_uw", dom.base)).unwrap_or(0);
+    let min = read_u64(&format!("{}/constraint_0_min_power_uw", dom.base)).unwrap_or(0);
+    Some(PowerCap { cur_uw: cur, min_uw: min, max_uw: max, path: dom.limit_path })
+}
+
+/// Sample the live package power draw in watts (blocks ~`ms`).
+pub fn power_draw_w(ms: u64) -> Option<f64> {
+    let dom = rapl_domain()?;
+    let a = read_u64(&dom.energy)?;
+    std::thread::sleep(Duration::from_millis(ms));
+    let b = read_u64(&dom.energy)?;
+    let delta = if b >= a {
+        b - a
+    } else if dom.max_range > 0 {
+        dom.max_range - a + b
+    } else {
+        0
+    };
+    let secs = ms as f64 / 1000.0;
+    if secs <= 0.0 { return None; }
+    Some((delta as f64 / 1_000_000.0) / secs)
 }
 
 /// Compute package watts from two energy samples (handling counter wrap), and
