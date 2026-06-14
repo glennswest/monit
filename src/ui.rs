@@ -2,6 +2,7 @@
 //! framebuffer. Most pages are two panels (pve | ai); the AI workload page is
 //! a single full-width panel.
 
+use crate::api::Widget;
 use crate::collect::{Gpu, Host, Mem};
 use crate::fb::{rgb, Color, Fb};
 use crate::font::Font;
@@ -86,13 +87,41 @@ fn human_bytes(b: u64) -> String {
     if b >= t { format!("{:.1}T", b as f64 / t as f64) } else { format!("{:.0}G", b as f64 / g as f64) }
 }
 
-pub fn render(fb: &mut Fb, f: &Fonts, page: Page, pve: &Host, ai: &Host, hist: &History, clock: &str) {
+/// One slot in the rotation: a built-in page or an app-pushed page (by id).
+#[derive(Clone)]
+pub enum Screen {
+    Builtin(Page),
+    Pushed(String),
+}
+
+pub fn render(
+    fb: &mut Fb,
+    f: &Fonts,
+    screens: &[Screen],
+    idx: usize,
+    pve: &Host,
+    ai: &Host,
+    hist: &History,
+    clock: &str,
+    store: &crate::api::Store,
+) {
     fb.clear(BG);
     let w = fb.w as isize;
     let margin = 40isize;
 
+    let screen = screens.get(idx).cloned().unwrap_or(Screen::Builtin(Page::Mem));
+    let page_title = match &screen {
+        Screen::Builtin(p) => p.title().to_string(),
+        Screen::Pushed(id) => store
+            .lock()
+            .unwrap()
+            .get(id)
+            .map(|s| if s.page.title.is_empty() { s.page.id.clone() } else { s.page.title.clone() })
+            .unwrap_or_else(|| "APP PAGE".to_string()),
+    };
+
     // Title bar: app + page name, page dots, clock.
-    let title = format!("g8 monitor   {}", page.title());
+    let title = format!("g8 monitor   {}", page_title.to_uppercase());
     fb.text(&f.big, margin, 22, 1, ACCENT, &title);
     let cw = Fb::text_w(&f.small, 2, clock);
     fb.text(&f.small, w - margin - cw, 8, 2, DIM, clock);
@@ -112,13 +141,15 @@ pub fn render(fb: &mut Fb, f: &Fonts, page: Page, pve: &Host, ai: &Host, hist: &
         bx -= Fb::text_w(&f.big, 1, &s);
         fb.text(&f.big, bx, 44, 1, temp_color(pve_t), &s);
     }
-    // page dots under the title text
-    let mut dx = margin;
+    // Page dots under the title text — one per screen, spacing adapts to count.
+    let n = screens.len().max(1);
+    let avail = (w - 2 * margin) as usize;
+    let step = (30usize).min(avail / n).max(8);
+    let dotw = (step.saturating_sub(8)).max(6);
     let dy = 64isize;
-    for p in Page::ALL {
-        let c = if p == page { ACCENT } else { GRID };
-        fb.rect(dx, dy, 22, 6, c);
-        dx += 30;
+    for i in 0..screens.len() {
+        let c = if i == idx { ACCENT } else { GRID };
+        fb.rect(margin + (i * step) as isize, dy, dotw, 6, c);
     }
     fb.rect(margin, 78, (w - 2 * margin) as usize, 2, BORDER);
 
@@ -128,6 +159,16 @@ pub fn render(fb: &mut Fb, f: &Fonts, page: Page, pve: &Host, ai: &Host, hist: &
     let pw = ((w - 2 * margin - gap) / 2) as usize;
     let lx = margin;
     let rx = margin + pw as isize + gap;
+
+    let page = match screen {
+        Screen::Builtin(p) => p,
+        Screen::Pushed(id) => {
+            let fw = (w - 2 * margin) as usize;
+            panel_bg(fb, lx, top, fw, h);
+            pushed_panel(fb, f, lx + 26, top + 26, fw as isize - 52, h as isize - 52, &id, store);
+            return;
+        }
+    };
 
     match page {
         Page::Gpu => {
@@ -693,6 +734,135 @@ fn log_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, hos
         cy += 20;
         if cy > y + h as isize - 24 {
             break;
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// App-pushed pages (declarative widgets over the REST API)
+// --------------------------------------------------------------------------
+
+/// Map a widget color name (or "#rrggbb") to a palette color.
+fn parse_color(spec: &Option<String>, default: Color) -> Color {
+    let s = match spec {
+        Some(s) => s.trim(),
+        None => return default,
+    };
+    match s.to_ascii_lowercase().as_str() {
+        "green" | "ok" => GREEN,
+        "yellow" | "warn" => YELLOW,
+        "red" | "crit" | "error" => RED,
+        "accent" | "blue" => ACCENT,
+        "gpu" | "purple" => GPU_CLR,
+        "power" | "orange" => POWER_CLR,
+        "dim" | "gray" | "grey" => DIM,
+        "text" | "white" => TEXT,
+        _ => parse_hex(s).unwrap_or(default),
+    }
+}
+
+fn parse_hex(s: &str) -> Option<Color> {
+    let s = s.strip_prefix('#')?;
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some(rgb(r, g, b))
+}
+
+/// Render an app-pushed page: iterate its declared widgets top-to-bottom,
+/// clipping to the panel. Unknown/oversized content is bounded by the API.
+fn pushed_panel(fb: &mut Fb, f: &Fonts, ix: isize, iy: isize, iw: isize, ih: isize, id: &str, store: &crate::api::Store) {
+    let guard = store.lock().unwrap();
+    let stored = match guard.get(id) {
+        Some(s) => s,
+        None => {
+            fb.text(&f.small, ix, iy + 8, 1, DIM, "page expired");
+            return;
+        }
+    };
+    let page = &stored.page;
+
+    // Header: title + source id.
+    let head = if page.title.is_empty() { page.id.clone() } else { page.title.clone() };
+    fb.rect(ix, iy + 6, 16, 16, ACCENT);
+    fb.text(&f.big, ix + 28, iy, 1, TEXT, &head);
+    let src = format!("app · {}", page.id);
+    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &src), iy + 8, 1, DIM, &src);
+    let mut cy = iy + 48;
+    let bottom = iy + ih;
+
+    for wdg in &page.widgets {
+        if cy > bottom - 24 {
+            break;
+        }
+        match wdg {
+            Widget::Heading { text, color } => {
+                cy += 6;
+                fb.text(&f.small, ix, cy, 1, parse_color(color, ACCENT), &text.to_uppercase());
+                cy += 20;
+                fb.rect(ix, cy, iw as usize, 1, BORDER);
+                cy += 12;
+            }
+            Widget::Text { label, value, color } => {
+                let clr = parse_color(color, TEXT);
+                match label {
+                    Some(l) => {
+                        fb.text(&f.small, ix, cy, 1, DIM, l);
+                        fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, value), cy, 1, clr, value);
+                    }
+                    None => {
+                        fb.text(&f.small, ix, cy, 1, clr, value);
+                    }
+                }
+                cy += 22;
+            }
+            Widget::Bar { label, frac, value, color } => {
+                let frac = frac.clamp(0.0, 1.0);
+                let clr = parse_color(color, level_color(frac));
+                fb.text(&f.small, ix, cy, 1, DIM, label);
+                if let Some(v) = value {
+                    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, v), cy, 1, TEXT, v);
+                }
+                cy += 20;
+                fb.bar(ix, cy, iw as usize, 18, frac, clr, TRACK, BORDER);
+                cy += 28;
+            }
+            Widget::Graph { label, series, color, max } => {
+                if let Some(l) = label {
+                    fb.text(&f.small, ix, cy, 1, DIM, l);
+                    cy += 20;
+                }
+                let maxv = max
+                    .filter(|m| *m > 0.0)
+                    .unwrap_or_else(|| series.iter().cloned().fold(0.0_f64, f64::max).max(1e-9));
+                let norm: Vec<f64> = series.iter().map(|v| (v / maxv).clamp(0.0, 1.0)).collect();
+                let gh = ((bottom - cy - 8).clamp(60, 140)) as usize;
+                fb.graph(ix, cy, iw as usize, gh, &norm, parse_color(color, ACCENT), GRID, TRACK, BORDER);
+                cy += gh as isize + 16;
+            }
+            Widget::Table { columns, rows } => {
+                let ncol = columns.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0)).max(1);
+                let colw = iw / ncol as isize;
+                if !columns.is_empty() {
+                    for (c, name) in columns.iter().enumerate() {
+                        fb.text(&f.small, ix + c as isize * colw, cy, 1, DIM, name);
+                    }
+                    cy += 22;
+                }
+                for row in rows {
+                    if cy > bottom - 20 {
+                        break;
+                    }
+                    for (c, cell) in row.iter().enumerate() {
+                        fb.text(&f.small, ix + c as isize * colw, cy, 1, TEXT, cell);
+                    }
+                    cy += 20;
+                }
+                cy += 8;
+            }
         }
     }
 }

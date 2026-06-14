@@ -5,6 +5,7 @@
 //! /dev/fb0. Site-specific values come from a config file (see config.rs);
 //! defaults are generic so the source carries no infrastructure details.
 
+mod api;
 mod collect;
 mod config;
 mod fb;
@@ -17,8 +18,8 @@ use fb::Fb;
 use font::Font;
 use history::History;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use ui::{Fonts, Page};
+use std::time::{Duration, Instant};
+use ui::{Fonts, Page, Screen};
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -54,6 +55,16 @@ fn main() {
     let unit = cfg.string("temp_unit", "MONIT_TEMP_UNIT", "C");
     ui::FAHRENHEIT.store(unit.eq_ignore_ascii_case("F"), std::sync::atomic::Ordering::Relaxed);
 
+    // REST API for app-pushed pages. Empty/"off" bind disables it.
+    let store = api::new_store();
+    api::serve(
+        api::ApiConfig {
+            bind: cfg.string("api_bind", "MONIT_API_BIND", "0.0.0.0:9090"),
+            token: cfg.opt("api_token", "MONIT_API_TOKEN"),
+        },
+        store.clone(),
+    );
+
     let handler = on_signal as *const () as usize;
     unsafe {
         libc::signal(libc::SIGTERM, handler);
@@ -83,8 +94,20 @@ fn main() {
         let ai = collect::remote(&ai_label, &ai_host, top);
         hist.record(&pve, &ai);
 
-        let page = Page::ALL[((tick / cycles_per_page) % Page::ALL.len() as u64) as usize];
-        ui::render(&mut fb, &fonts, page, &pve, &ai, &hist, &clock_string());
+        // Build the rotation: built-in pages (Logs dropped when both hosts have
+        // no recent errors) followed by any live app-pushed pages.
+        let mut screens: Vec<Screen> = Vec::new();
+        for p in Page::ALL {
+            if p == Page::Logs && pve.logs.is_empty() && ai.logs.is_empty() {
+                continue;
+            }
+            screens.push(Screen::Builtin(p));
+        }
+        for id in api::active_ids(&store, Instant::now()) {
+            screens.push(Screen::Pushed(id));
+        }
+        let idx = ((tick / cycles_per_page) % screens.len() as u64) as usize;
+        ui::render(&mut fb, &fonts, &screens, idx, &pve, &ai, &hist, &clock_string(), &store);
         fb.present();
         tick += 1;
 
