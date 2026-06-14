@@ -92,7 +92,23 @@ pub fn render(fb: &mut Fb, f: &Fonts, page: Page, pve: &Host, ai: &Host, hist: &
     let title = format!("g8 monitor   {}", page.title());
     fb.text(&f.big, margin, 22, 1, ACCENT, &title);
     let cw = Fb::text_w(&f.small, 2, clock);
-    fb.text(&f.small, w - margin - cw, 30, 2, DIM, clock);
+    fb.text(&f.small, w - margin - cw, 8, 2, DIM, clock);
+
+    // Always-on thermal banner (right side, second line): pve CPU + ai GPU.
+    let mut bx = w - margin;
+    let ai_t = ai.gpus.first().map(|g| g.temp_c).unwrap_or_else(|| ai.max_temp());
+    if ai.ok && ai_t > 0.0 {
+        let s = format!("ai GPU {}", fmt_temp(ai_t));
+        bx -= Fb::text_w(&f.big, 1, &s);
+        fb.text(&f.big, bx, 44, 1, temp_color(ai_t), &s);
+        bx -= 40;
+    }
+    let pve_t = pve.max_temp();
+    if pve.ok && pve_t > 0.0 {
+        let s = format!("pve CPU {}", fmt_temp(pve_t));
+        bx -= Fb::text_w(&f.big, 1, &s);
+        fb.text(&f.big, bx, 44, 1, temp_color(pve_t), &s);
+    }
     // page dots under the title text
     let mut dx = margin;
     let dy = 64isize;

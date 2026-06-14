@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [v0.2.1] — 2026-06-13
+
+### Added
+- Always-on thermal banner in the title bar of **every** page: pve CPU temp and
+  ai GPU temp, color-coded (green/amber/red). Keeps the most safety-critical
+  reading visible regardless of which page is showing.
+
 ## [v0.2.0] — 2026-06-13
 
 ### Added

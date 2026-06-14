@@ -1,6 +1,6 @@
 [package]
 name = "monit"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Framebuffer memory dashboard for the g8 cluster (pve + ai GPU host)"
 
