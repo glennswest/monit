@@ -23,23 +23,39 @@ real hostnames or IPs in the source or committed docs.** The repo is public.
   `/etc/systemd/system/monit.service`. See README.
 
 ## Version
-- Current: **0.3.0** (pre-1.0; defined in `Cargo.toml`).
+- Current: **0.4.0** (pre-1.0; defined in `Cargo.toml`).
 
 ## Layout of the code
 - `src/config.rs` — config-file + env loader (keeps infra out of the source).
 - `src/font.rs` — PSF1/PSF2 loader (Terminus fonts embedded from `assets/`).
 - `src/fb.rs` — framebuffer surface, draw primitives (rect/text/bar/graph), VT.
-- `src/collect.rs` — local `/proc`+`/sys`+`pvesm`+`journalctl` and remote SSH
-  blob collection & parsing (mem/cpu/temp/fan/disk/docker/logs/gpu).
+- `src/collect.rs` — local `/proc`+`/sys`+`pvesm`+`journalctl`+RAPL/cpufreq and
+  remote SSH blob collection & parsing (mem/cpu/temp/fan/disk/docker/logs/gpu,
+  per-process GPU via `nvidia-smi pmon`).
 - `src/history.rs` — ring buffers feeding the graphs.
-- `src/ui.rs` — page enum + per-page rendering (Mem/Cpu/Temp/Disk/Ai/Logs).
-- `src/main.rs` — config, signal handling, page rotation, refresh loop.
+- `src/api.rs` — REST server (background thread) + declarative page model for
+  app-pushed pages (TTL store, optional bearer token).
+- `src/ui.rs` — page enum + per-page rendering (Mem/Cpu/Temp/Disk/Gpu/Ai/Logs)
+  + app-pushed widget rendering; `Screen` rotation type.
+- `src/main.rs` — config, signal handling, API startup, page rotation, loop.
 
 ## Work plan
 - [x] Framebuffer renderer + collectors + memory dashboard (v0.1.0).
 - [x] Multi-page rotation + graphs: CPU, temps, disk, AI workload, logs (v0.2.0).
 - [x] Fan/pump RPM on temp page; °C/°F option; always-on thermal banner (v0.2.1).
 - [x] Move site-specific values to a config file for a public repo (v0.3.0).
+- [x] Deep GPU page (clocks/power/throttle/per-process SM), RAPL CPU package
+      power + AIO verdict, REST API for app-pushed pages, drop empty Logs page
+      from rotation (v0.4.0).
+
+## REST API (app-pushed pages)
+- `POST /api/v1/pages` — upsert a page `{id, title, ttl_secs?, widgets[]}`.
+  Widget types: `heading`, `text`, `bar`, `graph`, `table`. Colors are names
+  (green/yellow/red/accent/gpu/power/dim/text) or `#rrggbb`.
+- `GET /api/v1/pages` — list; `GET /api/v1/pages/{id}` — echo; `DELETE` — remove.
+- `GET /healthz` — liveness (no auth). `ttl_secs:0` = never expire; default 60s.
+- Bind via `api_bind` (default `0.0.0.0:9090`, `off` disables); optional
+  `api_token` bearer.
 
 ## Notes / gotchas
 - ioctl request arg type differs by libc (c_int on musl) — cast `KDSETMODE as _`.

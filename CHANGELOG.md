@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [v0.4.0] — 2026-06-14
+
+### Added
+- **GPU page** (dedicated, full-width) focused on what the accelerators are
+  actually doing: per-GPU SM-utilization headline, VRAM / power-vs-cap / temp
+  meters, SM & memory clocks, PCIe link (gen×width), performance state, and an
+  explicit **throttle status** (decoded from `clocks_throttle_reasons.active` —
+  SW/HW power cap, SW/HW thermal, power brake). Four history graphs (SM util,
+  VRAM, power-% of cap, temperature) plus a per-process **SM% / VRAM** table.
+- **Per-process GPU utilization** via `nvidia-smi pmon` (SM/enc/dec per PID),
+  merged with `--query-compute-apps` memory by PID.
+- Expanded `nvidia-smi --query-gpu` set: memory-controller utilization, SM/mem
+  clocks, power limit, fan %, memory temperature, pstate, PCIe gen/width, and
+  active throttle reasons. Falls back gracefully on older `nvidia-smi`.
+- **CPU package power (RAPL)** + average/max core frequency on the local host
+  (Intel `intel-rapl` and AMD via the same powercap framework), sampled around
+  the existing `/proc/stat` window. Shown on the CPU page.
+- **AIO / CPU-thermal verdict** on the Temperatures page: package power vs cap,
+  clock, pump RPM, and a heuristic that distinguishes "the AIO is dissipating
+  real heat" (high sustained draw held at a safe temperature) from "we're just
+  holding power low" (low draw → low temp regardless of cooling). Flags a
+  stopped pump.
+- **REST API** (`api.rs`) so apps can push their own pages into the rotation: a
+  declarative page (title + widgets: heading / text / bar / graph / table) is
+  `POST`ed to `/api/v1/pages` and rendered with monit's primitives. `GET` lists
+  and echoes pages, `DELETE` removes them, `/healthz` for liveness. Pages expire
+  on a TTL (re-POST to refresh). Optional bearer-token auth; bind address
+  configurable (`api_bind`, default `0.0.0.0:9090`; `off` disables). Untrusted
+  input is bounded (body/widget/series size caps). New deps: `serde`,
+  `serde_json`.
+- Config keys `api_bind` / `api_token` (env: `MONIT_API_BIND` / `MONIT_API_TOKEN`).
+
+### Changed
+- Page rotation now spans built-in **and** live app-pushed pages; the page-dot
+  row adapts its spacing to the number of pages.
+- The **Logs** page is dropped from the rotation when both hosts report no
+  recent journal errors, so it no longer wastes a rotation slot.
+- GPU processes are sorted by SM utilization, then resident VRAM.
+
 ## [v0.3.0] — 2026-06-13
 
 ### Added

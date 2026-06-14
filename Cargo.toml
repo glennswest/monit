@@ -1,6 +1,6 @@
 [package]
 name = "monit"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Framebuffer system dashboard (local host + remote GPU host over SSH)"
 
