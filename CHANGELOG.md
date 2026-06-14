@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [v0.3.0] — 2026-06-13
+
+### Added
+- Runtime config file (`/etc/monit/monit.conf`, override via `MONIT_CONFIG`)
+  holding all site-specific values (ssh target, labels, intervals, temp unit).
+  `deploy/monit.conf.example` ships as a template. Environment variables still
+  override the file.
+
+### Changed
+- Removed hardcoded hostnames from the source, systemd unit, and docs so the
+  repository can be public. Local-host label now defaults to the system
+  hostname; remote label defaults to the host part of `ai_host`.
+
 ## [v0.2.1] — 2026-06-13
 
 ### Added
@@ -41,11 +54,11 @@
 
 ### Added
 - Initial framebuffer memory dashboard (`monit`). Renders directly to
-  `/dev/fb0` on pve.g8.lo — no X/web. RAM usage + top consumers for the local
-  host (pve) and the GPU host (ai.g8.lo, over SSH), plus per-GPU memory and GPU
+  `/dev/fb0` on the hypervisor host — no X/web. RAM usage + top consumers for
+  the local host and a remote GPU host (over SSH), plus per-GPU memory and GPU
   process usage via `nvidia-smi`.
 - Embedded Terminus PSF fonts (8×16, 16×32) with a minimal PSF1/PSF2 loader and
   integer-scaled bitmap text renderer.
 - VT `KD_GRAPHICS` takeover while running; text mode restored on exit.
 - systemd unit conflicting with `getty@tty1` to own the attached display.
-- Static `x86_64-unknown-linux-musl` build on dev.g8.lo.
+- Static `x86_64-unknown-linux-musl` build.

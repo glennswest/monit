@@ -1,8 +1,8 @@
 [package]
 name = "monit"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
-description = "Framebuffer memory dashboard for the g8 cluster (pve + ai GPU host)"
+description = "Framebuffer system dashboard (local host + remote GPU host over SSH)"
 
 [dependencies]
 libc = "0.2"

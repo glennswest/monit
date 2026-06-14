@@ -1,5 +1,5 @@
 [Unit]
-Description=g8 framebuffer memory dashboard (pve + ai GPU host)
+Description=framebuffer cluster dashboard (local + remote GPU host)
 After=network-online.target
 Wants=network-online.target
 # Take tty1 away from the login prompt while the dashboard owns the screen.
@@ -9,13 +9,10 @@ After=getty@tty1.service
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/monit
+# Site-specific settings live here (hostnames, ssh target). Not in the repo.
+Environment=MONIT_CONFIG=/etc/monit/monit.conf
 Restart=always
 RestartSec=3
-Environment=MONIT_AI_HOST=root@ai.g8.lo
-Environment=MONIT_PVE_LABEL=pve.g8.lo
-Environment=MONIT_AI_LABEL=ai.g8.lo
-Environment=MONIT_REFRESH=2
-Environment=MONIT_TOP=8
 # Needs /dev/fb0 and /dev/tty0; runs as root.
 StandardOutput=journal
 StandardError=journal

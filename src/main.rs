@@ -1,21 +1,18 @@
 //! monit — framebuffer memory/CPU/temp/disk/GPU dashboard for the g8 cluster.
 //!
-//! Runs as a systemd service on pve.g8.lo. Reads the local host from /proc,
-//! the remote GPU host (ai.g8.lo) over SSH, and paints a rotating set of pages
-//! to /dev/fb0. Config via environment:
-//!   MONIT_AI_HOST    ssh target for the GPU host   (default root@ai.g8.lo)
-//!   MONIT_PVE_LABEL  panel label for the local host (default pve.g8.lo)
-//!   MONIT_AI_LABEL   panel label for the GPU host   (default ai.g8.lo)
-//!   MONIT_REFRESH    data refresh seconds           (default 2)
-//!   MONIT_PAGE_SECS  seconds per page before rotate (default 8)
-//!   MONIT_TOP        rows of top consumers per host (default 8)
+//! Runs as a systemd service on the hypervisor host. Reads the local host from
+//! /proc, the remote GPU host over SSH, and paints a rotating set of pages to
+//! /dev/fb0. Site-specific values come from a config file (see config.rs);
+//! defaults are generic so the source carries no infrastructure details.
 
 mod collect;
+mod config;
 mod fb;
 mod font;
 mod history;
 mod ui;
 
+use config::Config;
 use fb::Fb;
 use font::Font;
 use history::History;
@@ -27,10 +24,6 @@ static STOP: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_signal(_sig: libc::c_int) {
     STOP.store(true, Ordering::SeqCst);
-}
-
-fn env_or(key: &str, default: &str) -> String {
-    std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
 /// Local wall-clock "YYYY-MM-DD HH:MM:SS" via libc, honoring TZ.
@@ -51,13 +44,14 @@ fn clock_string() -> String {
 }
 
 fn main() {
-    let ai_host = env_or("MONIT_AI_HOST", "root@ai.g8.lo");
-    let pve_label = env_or("MONIT_PVE_LABEL", "pve.g8.lo");
-    let ai_label = env_or("MONIT_AI_LABEL", "ai.g8.lo");
-    let refresh: u64 = env_or("MONIT_REFRESH", "2").parse().unwrap_or(2);
-    let page_secs: u64 = env_or("MONIT_PAGE_SECS", "8").parse().unwrap_or(8);
-    let top: usize = env_or("MONIT_TOP", "8").parse().unwrap_or(8);
-    let unit = env_or("MONIT_TEMP_UNIT", "C");
+    let cfg = Config::load();
+    let ai_host = cfg.string("ai_host", "MONIT_AI_HOST", "root@gpu-host.local");
+    let pve_label = cfg.opt("pve_label", "MONIT_PVE_LABEL").unwrap_or_else(config::hostname);
+    let ai_label = cfg.opt("ai_label", "MONIT_AI_LABEL").unwrap_or_else(|| config::host_part(&ai_host));
+    let refresh: u64 = cfg.parse("refresh", "MONIT_REFRESH", 2);
+    let page_secs: u64 = cfg.parse("page_secs", "MONIT_PAGE_SECS", 8);
+    let top: usize = cfg.parse("top", "MONIT_TOP", 8);
+    let unit = cfg.string("temp_unit", "MONIT_TEMP_UNIT", "C");
     ui::FAHRENHEIT.store(unit.eq_ignore_ascii_case("F"), std::sync::atomic::Ordering::Relaxed);
 
     let handler = on_signal as *const () as usize;

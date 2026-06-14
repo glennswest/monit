@@ -1,0 +1,25 @@
+# monit configuration — copy to /etc/monit/monit.conf and edit.
+# Format: key = value   (# starts a comment)
+# Environment variables (MONIT_AI_HOST, ...) override these at runtime.
+
+# SSH target for the remote GPU host. Must allow key-based, non-interactive
+# root login from the host running monit (BatchMode is used; no passwords).
+ai_host = root@gpu-host.local
+
+# Panel label for the local host. Defaults to the system hostname if unset.
+#pve_label = hypervisor
+
+# Panel label for the remote host. Defaults to the host part of ai_host.
+#ai_label = gpu-host
+
+# Data refresh interval, seconds.
+refresh = 2
+
+# Seconds per page before rotating to the next.
+page_secs = 8
+
+# Rows of top consumers shown per host.
+top = 8
+
+# Temperature unit: C or F.
+temp_unit = C

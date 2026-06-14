@@ -9,6 +9,10 @@ Cargo.lock
 *.pem
 *.key
 
+# Site-specific runtime config (keep real hostnames out of the repo)
+monit.conf
+/etc/monit/monit.conf
+
 # IDE and OS
 .vscode/
 .idea/
