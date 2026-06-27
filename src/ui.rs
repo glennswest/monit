@@ -554,6 +554,7 @@ const LC_TAN: Color = rgb(255, 204, 153);
 // Two device colors: each section/graph is colored by device.
 const LC_CPU: Color = rgb(120, 180, 255); // ice blue
 const LC_GPU: Color = rgb(255, 150, 40); // amber
+const LC_TEMP: Color = rgb(235, 235, 215); // temperature overlay (warm white)
 
 /// Full-screen overview: top half is CPU | GPU live stats; bottom half is an
 /// LCARS-styled history panel with THERMAL and PERFORMANCE graphs over time.
@@ -599,23 +600,26 @@ fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, h
     let col_w = ((wi - col_gap) / 2).max(60);
 
     device_col(fb, f, x, body_y, col_w as usize, body_h as usize, "CPU", LC_CPU,
-        ("PERF  %", hist.pve_cpu.slice()), ("MEMORY  %", hist.pve_mem.slice()));
+        ("PERF % / TEMP", hist.pve_cpu.slice(), hist.pve_temp.slice()),
+        ("MEMORY  %", hist.pve_mem.slice()));
     device_col(fb, f, x + col_w + col_gap, body_y, col_w as usize, body_h as usize, "GPU", LC_GPU,
-        ("PERF  %", hist.gpu_util.slice()), ("VRAM  %", hist.gpu_mem.slice()));
+        ("PERF % / TEMP", hist.gpu_util.slice(), hist.gpu_temp.slice()),
+        ("VRAM  %", hist.gpu_mem.slice()));
 }
 
 /// One device section: a colored header pill (also the legend) above two stacked
-/// graphs, all in the device's color.
-fn device_col(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, name: &str, clr: Color, g1: (&str, Vec<f64>), g2: (&str, Vec<f64>)) {
+/// graphs in the device's color. The PERF graph overlays a white temp line.
+fn device_col(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, name: &str, clr: Color, perf: (&str, Vec<f64>, Vec<f64>), mem: (&str, Vec<f64>)) {
     // Device header pill.
     let ph = 24isize;
     fb.fill_round(x, y, w, ph as usize, ph as usize / 2, clr);
     fb.text(&f.small, x + 16, y + 5, 1, BLACK, name);
-    // Two stacked graphs filling the rest.
+    // Two stacked graphs filling the rest. PERF = utilization (device color) +
+    // temperature (white) overlaid; MEMORY/VRAM = single device-color line.
     let gy = y + ph + 8;
     let gh = (((y + h as isize - gy) - 8) / 2).max(36) as usize;
-    lcars_graph(fb, f, x, gy, w, gh, g1.0, &[(g1.1, clr)]);
-    lcars_graph(fb, f, x, gy + gh as isize + 8, w, gh, g2.0, &[(g2.1, clr)]);
+    lcars_graph(fb, f, x, gy, w, gh, perf.0, &[(perf.1, clr), (perf.2, LC_TEMP)]);
+    lcars_graph(fb, f, x, gy + gh as isize + 8, w, gh, mem.0, &[(mem.1, clr)]);
 }
 
 /// One LCARS graph: a colored title tab, the plotted history below, and a bright
