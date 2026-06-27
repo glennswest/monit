@@ -552,9 +552,10 @@ const BLACK: Color = rgb(0, 0, 0);
 const LC_ORANGE: Color = rgb(255, 153, 0);
 const LC_TAN: Color = rgb(255, 204, 153);
 const LC_LILAC: Color = rgb(204, 153, 204);
-const LC_BLUE: Color = rgb(153, 153, 255);
-const LC_RED: Color = rgb(255, 105, 97);
 const LC_PEACH: Color = rgb(255, 170, 128);
+// Two device colors used across BOTH graphs so one legend covers everything.
+const LC_CPU: Color = rgb(120, 180, 255); // ice blue
+const LC_GPU: Color = rgb(255, 150, 40); // amber
 
 /// Full-screen overview: top half is CPU | GPU live stats; bottom half is an
 /// LCARS-styled history panel with THERMAL and PERFORMANCE graphs over time.
@@ -574,12 +575,15 @@ fn overview_page(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize,
     fb.rect(cx - 1, y + 16, 2, (stats_h - 16).max(20) as usize, BORDER);
 
     let by = split + 8;
-    lcars_panel(fb, f, x, by, w, (y + h as isize - by).max(80) as usize, pve, ai, hist, clock);
+    let bottom_margin = 30isize; // keep the panel off the very bottom edge
+    let panel_h = (y + h as isize - by - bottom_margin).max(80) as usize;
+    lcars_panel(fb, f, x, by, w, panel_h, hist, clock);
 }
 
-/// LCARS history panel: header bar, rounded side blocks, and two stacked graphs
-/// (THERMAL °C, PERFORMANCE %), each plotting CPU + GPU over time with live tags.
-fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, pve: &Host, ai: &Host, hist: &History, clock: &str) {
+/// LCARS history panel: header bar, a sidebar that doubles as the CPU/GPU color
+/// legend, and two stacked graphs (THERMAL °C, PERFORMANCE %) over time. CPU is
+/// one color and GPU another across both graphs, so the sidebar legend says all.
+fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, hist: &History, clock: &str) {
     let wi = w as isize;
     fb.rect(x, y, w, h, BLACK);
 
@@ -595,8 +599,9 @@ fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, p
     let body_y = y + head_h + gap;
     let body_h = (y + h as isize - body_y).max(40);
 
-    // Left sidebar: stacked rounded blocks (decorative LCARS column).
-    let blocks = [(LC_TAN, "THRM"), (LC_LILAC, "PERF"), (LC_BLUE, "CORE"), (LC_PEACH, "FLOW")];
+    // Sidebar: top two blocks ARE the legend (CPU / GPU colors); rest is LCARS
+    // filler for the look.
+    let blocks = [(LC_CPU, "CPU"), (LC_GPU, "GPU"), (LC_LILAC, "SYS"), (LC_PEACH, "47")];
     let n = blocks.len() as isize;
     let sgap = 8isize;
     let bh = (body_h - (n - 1) * sgap) / n;
@@ -606,41 +611,28 @@ fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, p
         fb.text(&f.small, x + 16, yb + bh - 22, 1, BLACK, lbl);
     }
 
-    // Two stacked graphs to the right of the sidebar.
+    // Two stacked graphs to the right of the sidebar. CPU=ice, GPU=amber in both.
     let gx = x + side_w + gap;
     let gw = (x + wi - gx).max(40) as usize;
     let gh = ((body_h - gap) / 2).max(40) as usize;
 
-    let gpu_t = ai.gpus.first().map(|g| g.temp_c).unwrap_or(0.0);
-    let gpu_u = ai.gpus.first().map(|g| g.util as f64).unwrap_or(0.0);
-
     lcars_graph(
         fb, f, gx, body_y, gw, gh, "THERMAL  C",
-        &[(hist.pve_temp.slice(), LC_ORANGE), (hist.gpu_temp.slice(), LC_RED)],
-        &[("CPU", pve.max_temp(), LC_ORANGE), ("GPU", gpu_t, LC_RED)], " C",
+        &[(hist.pve_temp.slice(), LC_CPU), (hist.gpu_temp.slice(), LC_GPU)],
     );
     lcars_graph(
         fb, f, gx, body_y + gh as isize + gap, gw, gh, "PERFORMANCE  %",
-        &[(hist.pve_cpu.slice(), LC_BLUE), (hist.gpu_util.slice(), LC_LILAC)],
-        &[("CPU", pve.cpu.overall * 100.0, LC_BLUE), ("GPU", gpu_u, LC_LILAC)], "%",
+        &[(hist.pve_cpu.slice(), LC_CPU), (hist.gpu_util.slice(), LC_GPU)],
     );
 }
 
-/// One LCARS graph: a colored title tab, current-value readouts on the right,
-/// the plotted history below, and a bright base rail.
-fn lcars_graph(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, title: &str, series: &[(Vec<f64>, Color)], readouts: &[(&str, f64, Color)], unit: &str) {
-    let wi = w as isize;
+/// One LCARS graph: a colored title tab, the plotted history below, and a bright
+/// base rail.
+fn lcars_graph(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, title: &str, series: &[(Vec<f64>, Color)]) {
     // Title tab (rounded) top-left.
     let tab_w = Fb::text_w(&f.small, 1, title) + 30;
     fb.fill_round(x, y, tab_w as usize, 22, 11, LC_TAN);
     fb.text(&f.small, x + 15, y + 3, 1, BLACK, title);
-    // Live readouts, right-aligned.
-    let mut rxp = x + wi;
-    for (lbl, val, clr) in readouts.iter().rev() {
-        let s = format!("{} {:.0}{}", lbl, val, unit);
-        rxp -= Fb::text_w(&f.small, 1, &s) + 20;
-        fb.text(&f.small, rxp, y + 4, 1, *clr, &s);
-    }
     // History plot (newest at right) on a near-black track with a dim rail.
     let gy = y + 28;
     let gh = (h as isize - 28 - 6).max(20) as usize;

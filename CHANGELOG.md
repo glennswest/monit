@@ -6,7 +6,9 @@
 - **feat:** Overview bottom half redrawn as an **LCARS** (Star-Trek-computer)
   history panel — black ground, rounded header bar + sidebar blocks, and two
   stacked graphs: **THERMAL** (CPU + GPU temp over time) and **PERFORMANCE**
-  (CPU + GPU utilization over time), each with live value readouts. New
+  (CPU + GPU utilization over time). A single two-color scheme spans both graphs
+  (CPU = ice blue, GPU = amber); the top two sidebar blocks double as the
+  legend. Fits within a bottom margin so nothing runs off-screen. New
   `Fb::fill_round` rounded-rectangle primitive.
 
 ### 2026-06-27 (governor)
