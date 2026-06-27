@@ -1,0 +1,64 @@
+#!/bin/bash
+# adaptive-thermal: closed-loop CPU thermal governor for pve.g8.lo
+#
+# Watches the hottest CPU core and steers intel_pstate max_perf_pct to hold a
+# target temperature band. Self-healing:
+#   * cooling healthy  -> temp low  -> ramps back toward 100% (full performance)
+#   * cooling fails    -> temp high -> throttles automatically to stay safe
+# Also forces the pump (pwm3) + radiator fan (pwm7) to full at all times.
+# Hardware PROCHOT at Tjmax (100C) remains the ultimate backstop if this dies.
+
+set -u
+PCT=/sys/devices/system/cpu/intel_pstate/max_perf_pct
+INTERVAL=2
+
+# temperature thresholds (deg C)
+T_EMERG=96   # slam to minimum
+T_CRIT=90    # cut hard
+T_HIGH=84    # step down
+T_OK=74      # below this: gently ramp up;  74..84 = hold band
+
+MIN_PCT=18
+MAX_PCT=100
+UP=3         # gentle recovery
+DOWN=7       # quicker backoff
+CUT=15       # hard cut near crit
+
+read_temp() {
+  sensors -u coretemp-isa-0000 2>/dev/null \
+    | awk "/_input:/{v=\$2+0; if(v>m)m=v} END{printf \"%d\", m+0}"
+}
+
+NCT=""
+for h in /sys/class/hwmon/hwmon*; do
+  case "$(cat "$h/name" 2>/dev/null)" in nct67*) NCT="$h"; break;; esac
+done
+force_pump() {
+  [ -n "$NCT" ] || return
+  for p in pwm3 pwm7; do
+    [ -e "$NCT/${p}_enable" ] && echo 1   > "$NCT/${p}_enable" 2>/dev/null
+    [ -e "$NCT/$p" ]          && echo 255 > "$NCT/$p"          2>/dev/null
+  done
+}
+
+cur=$(cat "$PCT" 2>/dev/null || echo 100)
+echo "adaptive-thermal: start; max_perf_pct=$cur nct=${NCT:-none}"
+
+while true; do
+  force_pump
+  t=$(read_temp)
+  new=$cur
+  if   [ "$t" -ge "$T_EMERG" ]; then new=$MIN_PCT
+  elif [ "$t" -ge "$T_CRIT"  ]; then new=$(( cur - CUT ))
+  elif [ "$t" -ge "$T_HIGH"  ]; then new=$(( cur - DOWN ))
+  elif [ "$t" -lt "$T_OK"    ]; then new=$(( cur + UP ))
+  fi
+  [ "$new" -lt "$MIN_PCT" ] && new=$MIN_PCT
+  [ "$new" -gt "$MAX_PCT" ] && new=$MAX_PCT
+  if [ "$new" -ne "$cur" ]; then
+    echo "$new" > "$PCT" 2>/dev/null
+    echo "adaptive-thermal: temp=${t}C  max_perf_pct ${cur} -> ${new}"
+    cur=$new
+  fi
+  sleep "$INTERVAL"
+done
