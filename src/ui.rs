@@ -547,9 +547,17 @@ enum Role {
     Gpu,
 }
 
-/// Full-screen overview: CPU (left) and GPU (right) as one unified screen with
-/// a thin divider, big USAGE/TEMP numbers, memory bars, limit + cooling status,
-/// and a single combined history graph (colored lines) across the bottom.
+// LCARS (Star-Trek computer) palette for the history panel.
+const BLACK: Color = rgb(0, 0, 0);
+const LC_ORANGE: Color = rgb(255, 153, 0);
+const LC_TAN: Color = rgb(255, 204, 153);
+const LC_LILAC: Color = rgb(204, 153, 204);
+const LC_BLUE: Color = rgb(153, 153, 255);
+const LC_RED: Color = rgb(255, 105, 97);
+const LC_PEACH: Color = rgb(255, 170, 128);
+
+/// Full-screen overview: top half is CPU | GPU live stats; bottom half is an
+/// LCARS-styled history panel with THERMAL and PERFORMANCE graphs over time.
 fn overview_page(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, pve: &Host, ai: &Host, hist: &History, clock: &str) {
     let cx = x + w as isize / 2; // divider center
     let colpad = 26isize;
@@ -557,39 +565,88 @@ fn overview_page(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize,
     let lx = x + colpad;
     let rx = cx + colpad / 2;
 
-    // Bottom band: legend + combined graph.
-    let legend_h = 24isize;
-    let graph_h = 210isize;
-    let stats_h = (h as isize - graph_h - legend_h - 24).max(120);
+    // Top: live stats. Bottom: LCARS history graphs.
+    let split = y + 356.min(h as isize * 7 / 10);
+    let stats_h = (split - y - 8).max(120);
 
     draw_half(fb, f, lx, y + 8, half_w as usize, stats_h as usize, pve, Role::Cpu);
     draw_half(fb, f, rx, y + 8, half_w as usize, stats_h as usize, ai, Role::Gpu);
-
-    // Thin vertical divider instead of two separate boxes.
     fb.rect(cx - 1, y + 16, 2, (stats_h - 16).max(20) as usize, BORDER);
 
-    // Combined graph — newest at the right. All series share a 0..1 axis
-    // (utilizations as fractions, temps as °C/100), so they're comparable.
-    let gy = y + 8 + stats_h + 8;
-    let series = vec![
-        (hist.pve_cpu.slice(), ACCENT),
-        (hist.gpu_util.slice(), GPU_CLR),
-        (hist.pve_temp.slice(), POWER_CLR),
-        (hist.gpu_temp.slice(), RED),
-    ];
-    fb.graph_multi(x, gy, w, graph_h as usize, &series, TRACK, BORDER);
+    let by = split + 8;
+    lcars_panel(fb, f, x, by, w, (y + h as isize - by).max(80) as usize, pve, ai, hist, clock);
+}
 
-    // Legend across the bottom; clock right-aligned on the same line.
-    let ly = gy + graph_h + 6;
-    let items = [("CPU %", ACCENT), ("GPU %", GPU_CLR), ("CPU temp", POWER_CLR), ("GPU temp", RED)];
-    let mut lxp = x;
-    for (label, clr) in items {
-        fb.rect(lxp, ly + 2, 18, 12, clr);
-        fb.text(&f.small, lxp + 24, ly, 1, DIM, label);
-        lxp += 24 + Fb::text_w(&f.small, 1, label) + 34;
+/// LCARS history panel: header bar, rounded side blocks, and two stacked graphs
+/// (THERMAL °C, PERFORMANCE %), each plotting CPU + GPU over time with live tags.
+fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, pve: &Host, ai: &Host, hist: &History, clock: &str) {
+    let wi = w as isize;
+    fb.rect(x, y, w, h, BLACK);
+
+    let head_h = 34isize;
+    let gap = 10isize;
+    let side_w = 92isize;
+
+    // Header bar (rounded), title left + clock right, in LCARS orange.
+    fb.fill_round(x, y, w, head_h as usize, head_h as usize / 2, LC_ORANGE);
+    fb.text(&f.big, x + 26, y + 1, 1, BLACK, "LCARS // SENSOR HISTORY");
+    fb.text(&f.small, x + wi - Fb::text_w(&f.small, 1, clock) - 24, y + 9, 1, BLACK, clock);
+
+    let body_y = y + head_h + gap;
+    let body_h = (y + h as isize - body_y).max(40);
+
+    // Left sidebar: stacked rounded blocks (decorative LCARS column).
+    let blocks = [(LC_TAN, "THRM"), (LC_LILAC, "PERF"), (LC_BLUE, "CORE"), (LC_PEACH, "FLOW")];
+    let n = blocks.len() as isize;
+    let sgap = 8isize;
+    let bh = (body_h - (n - 1) * sgap) / n;
+    for (i, (c, lbl)) in blocks.iter().enumerate() {
+        let yb = body_y + i as isize * (bh + sgap);
+        fb.fill_round(x, yb, side_w as usize, bh.max(8) as usize, 14, *c);
+        fb.text(&f.small, x + 16, yb + bh - 22, 1, BLACK, lbl);
     }
-    let cw = Fb::text_w(&f.small, 1, clock);
-    fb.text(&f.small, x + w as isize - cw, ly, 1, DIM, clock);
+
+    // Two stacked graphs to the right of the sidebar.
+    let gx = x + side_w + gap;
+    let gw = (x + wi - gx).max(40) as usize;
+    let gh = ((body_h - gap) / 2).max(40) as usize;
+
+    let gpu_t = ai.gpus.first().map(|g| g.temp_c).unwrap_or(0.0);
+    let gpu_u = ai.gpus.first().map(|g| g.util as f64).unwrap_or(0.0);
+
+    lcars_graph(
+        fb, f, gx, body_y, gw, gh, "THERMAL  C",
+        &[(hist.pve_temp.slice(), LC_ORANGE), (hist.gpu_temp.slice(), LC_RED)],
+        &[("CPU", pve.max_temp(), LC_ORANGE), ("GPU", gpu_t, LC_RED)], " C",
+    );
+    lcars_graph(
+        fb, f, gx, body_y + gh as isize + gap, gw, gh, "PERFORMANCE  %",
+        &[(hist.pve_cpu.slice(), LC_BLUE), (hist.gpu_util.slice(), LC_LILAC)],
+        &[("CPU", pve.cpu.overall * 100.0, LC_BLUE), ("GPU", gpu_u, LC_LILAC)], "%",
+    );
+}
+
+/// One LCARS graph: a colored title tab, current-value readouts on the right,
+/// the plotted history below, and a bright base rail.
+fn lcars_graph(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, title: &str, series: &[(Vec<f64>, Color)], readouts: &[(&str, f64, Color)], unit: &str) {
+    let wi = w as isize;
+    // Title tab (rounded) top-left.
+    let tab_w = Fb::text_w(&f.small, 1, title) + 30;
+    fb.fill_round(x, y, tab_w as usize, 22, 11, LC_TAN);
+    fb.text(&f.small, x + 15, y + 3, 1, BLACK, title);
+    // Live readouts, right-aligned.
+    let mut rxp = x + wi;
+    for (lbl, val, clr) in readouts.iter().rev() {
+        let s = format!("{} {:.0}{}", lbl, val, unit);
+        rxp -= Fb::text_w(&f.small, 1, &s) + 20;
+        fb.text(&f.small, rxp, y + 4, 1, *clr, &s);
+    }
+    // History plot (newest at right) on a near-black track with a dim rail.
+    let gy = y + 28;
+    let gh = (h as isize - 28 - 6).max(20) as usize;
+    fb.graph_multi(x, gy, w, gh, series, rgb(10, 12, 16), rgb(70, 45, 12));
+    // Bright LCARS base rail.
+    fb.fill_round(x, y + h as isize - 4, w, 4, 2, LC_ORANGE);
 }
 
 /// One side of the overview (CPU or GPU): status dot + role tag, big USAGE and

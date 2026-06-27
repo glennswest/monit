@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 2026-06-27 (LCARS)
+- **feat:** Overview bottom half redrawn as an **LCARS** (Star-Trek-computer)
+  history panel — black ground, rounded header bar + sidebar blocks, and two
+  stacked graphs: **THERMAL** (CPU + GPU temp over time) and **PERFORMANCE**
+  (CPU + GPU utilization over time), each with live value readouts. New
+  `Fb::fill_round` rounded-rectangle primitive.
+
 ### 2026-06-27 (governor)
 - **feat:** Built-in **closed-loop thermal governor** (`governor.rs`, opt-in via
   `thermal_control`) — folds the standalone adaptive-thermal.sh into monit.

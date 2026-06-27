@@ -211,6 +211,24 @@ impl Fb {
         self.frame(x, y, w, h, border);
     }
 
+    /// Filled rounded rectangle (LCARS blocks/pills). `r` is the corner radius.
+    pub fn fill_round(&mut self, x: isize, y: isize, w: usize, h: usize, r: usize, c: Color) {
+        let (w, h) = (w as isize, h as isize);
+        let rr = (r as isize).min(w / 2).min(h / 2).max(0);
+        for dy in 0..h {
+            for dx in 0..w {
+                // Clamp to the nearest corner's circle center; straight edges
+                // and the interior have zero offset and are always filled.
+                let cx = if dx < rr { rr } else if dx >= w - rr { w - 1 - rr } else { dx };
+                let cy = if dy < rr { rr } else if dy >= h - rr { h - 1 - rr } else { dy };
+                let (ddx, ddy) = (dx - cx, dy - cy);
+                if ddx * ddx + ddy * ddy <= rr * rr {
+                    self.put(x + dx, y + dy, c);
+                }
+            }
+        }
+    }
+
     /// Overlay several 0..1 series as colored lines on one set of axes (newest
     /// sample at the right edge). Used by the overview's combined graph.
     pub fn graph_multi(&mut self, x: isize, y: isize, w: usize, h: usize, series: &[(Vec<f64>, Color)], track: Color, border: Color) {
