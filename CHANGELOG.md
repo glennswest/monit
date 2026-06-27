@@ -2,52 +2,36 @@
 
 ## [Unreleased]
 
-### 2026-06-27 (LCARS)
-- **feat:** Overview bottom half redrawn as an **LCARS** (Star-Trek-computer)
-  history panel — black ground, rounded header bar + sidebar blocks, and two
-  stacked graphs. Organized as two **device sections** — CPU (left) and GPU
-  (right) — each with a colored header pill and **PERF** + **MEMORY** graphs
-  over time, colored by device (CPU = ice blue, GPU = amber). New
-  `Fb::fill_round` rounded-rectangle primitive.
-- **feat:** `view_h` viewport height honored so the overview fits panels that
-  crop the bottom as well as the sides.
+## [v0.7.0] — 2026-06-27
 
-### 2026-06-27 (governor)
-- **feat:** Built-in **closed-loop thermal governor** (`governor.rs`, opt-in via
-  `thermal_control`) — folds the standalone adaptive-thermal.sh into monit.
-  Forces the AIO **pump to full**, drives the **radiator fan on a temperature
-  curve** (dynamic/quieter, configurable `gov_temp_lo/hi` + `gov_duty_lo/hi`),
-  and holds a **CPU temperature band** via intel_pstate `max_perf_pct`
-  (auto-throttle on cooling failure, ramp back when cool; `gov_t_*`, `gov_perf_min`).
-  PROCHOT (~100 °C) remains the hardware backstop; `monit.service` runs
-  `Restart=always` and now `modprobe nct6775` on start.
-- **feat:** CPU **LIMITING** line shows governor throttling — `intel_pstate
-  max_perf_pct` is collected (`Power.perf_pct`); when <100 the line reads
-  `THROTTLED perf N% (thermal gov)`.
+### Added
+- **Overview** is now the sole default view (rotation dropped), full-screen with
+  no title bar/banner. Top half: **CPU** (left) and **GPU** (right) with big
+  USAGE % and TEMP numbers, a memory/VRAM bar, a **LIMITING** line, and a boxed
+  **COOLING** verdict that flags a stopped AIO pump (`PUMP STOPPED!`) or GPU
+  `THERMAL THROTTLE!`.
+- **LCARS history panel** on the bottom half — black ground, rounded header bar,
+  two **device sections** (CPU/GPU), each with **PERF % / TEMP** (utilization +
+  white temp line) and **MEMORY / VRAM %** graphs over time, colored by device
+  (CPU = ice blue, GPU = amber). New `Fb::fill_round` and `Fb::graph_multi`.
+- **Closed-loop thermal governor** (`governor.rs`, opt-in via `thermal_control`)
+  — folds the standalone adaptive-thermal.sh into monit. Forces the AIO pump to
+  full, drives the radiator fan on a temperature curve (`gov_temp_lo/hi`,
+  `gov_duty_lo/hi`), and holds a CPU temperature band via intel_pstate
+  `max_perf_pct` (`gov_t_*`, `gov_perf_min`). PROCHOT (~100 °C) is the hardware
+  backstop; `monit.service` runs `Restart=always` and `modprobe nct6775`.
+- **Viewport config** (`view_x`/`view_y`/`view_w`/`view_h`) and `overscan` so the
+  overview fits panels that crop their edges or display only part of the
+  framebuffer.
+- **Fan config** (`fan_labels`, `pump_fan`) for boards whose Super I/O exposes no
+  fan labels (e.g. nct6798); the COOLING verdict watches the configured pump
+  channel for a 0-rpm stall.
+- CPU **LIMITING** line distinguishes stock-TDP protection from an imposed RAPL
+  throttle (`pkg_max_w`) or a governor pstate cap (`Power.perf_pct` →
+  `THROTTLED perf N%`).
 
-### 2026-06-27
-- **feat:** New **Overview** pane is the sole default view (rotation dropped),
-  drawn full-screen with no title bar/banner. One unified screen split by a thin
-  divider — **CPU** (left) and **GPU** (right) — each with big USAGE % and TEMP
-  numbers, a memory/VRAM bar, a **LIMITING** line, and a prominent boxed
-  **COOLING** verdict that calls out a stopped AIO pump (`PUMP STOPPED!`) or a
-  GPU `THERMAL THROTTLE!` so a cooling failure is obvious at a glance. A single
-  combined history graph across the bottom overlays four colored lines (CPU %,
-  GPU %, CPU temp, GPU temp) with a legend.
-- **feat:** `overscan` config option (px inset on every side) so panels that
-  crop their edges still show all content. New `Fb::graph_multi` line-graph.
-- **feat:** `view_x`/`view_y`/`view_w`/`view_h` viewport config — render the
-  overview into an explicit rectangle for panels that display only part of the
-  framebuffer (e.g. a monitor that scales the left region to full width). A zero
-  width/height falls back to the full framebuffer (minus `overscan`).
-- **feat:** RAPL hardware max (`pkg_max_w`) collected; the CPU LIMITING line now
-  distinguishes stock-TDP protection (shown calmly) from an imposed throttle
-  (cap held below the hardware max — flagged), instead of alarming at normal TDP.
-- **feat:** `fan_labels` + `pump_fan` config so boards whose Super I/O exposes no
-  fan labels (e.g. nct6798) can name channels and designate the AIO pump. The
-  COOLING verdict now watches the configured pump channel for a stall (0 rpm)
-  instead of relying on a "pump" label that such boards never provide.
-- **feat:** `video=HDMI-A-1:1920x1080@60e` documented as the host-side fix for a
+### Fixed
+- Documented `video=HDMI-A-1:1920x1080@60e` as the host-side fix for a
   framebuffer that won't scan out after cold-booting with no panel attached
   (forces the display pipe up at init regardless of attach state).
 
