@@ -14,6 +14,12 @@ const KDSETMODE: libc::c_int = 0x4B3A;
 const KD_TEXT: libc::c_int = 0x00;
 const KD_GRAPHICS: libc::c_int = 0x01;
 
+// FBIOBLANK wakes a blanked/DPMS-powered-down panel. Without this, writing
+// pixels to a framebuffer whose CRTC is in FB_BLANK_POWERDOWN leaves the
+// display dark ("trying to sync") because the scanout stays disabled.
+const FBIOBLANK: libc::c_int = 0x4611;
+const FB_BLANK_UNBLANK: libc::c_int = 0x00;
+
 pub type Color = u32;
 
 pub const fn rgb(r: u8, g: u8, b: u8) -> Color {
@@ -51,6 +57,13 @@ impl Fb {
             .unwrap_or(w * 4);
 
         let dev = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
+
+        // Wake the panel: if the display blanked (DPMS power-down) while we were
+        // down, the CRTC scanout is off and our writes never reach the screen.
+        // FB_BLANK_UNBLANK re-enables it; it's a no-op when already unblanked.
+        unsafe {
+            libc::ioctl(dev.as_raw_fd(), FBIOBLANK as _, FB_BLANK_UNBLANK);
+        }
 
         // Take the active console into graphics mode so fbcon stops drawing
         // text (and the blinking cursor) over our framebuffer.

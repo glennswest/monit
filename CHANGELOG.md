@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-06-27
+
+### Fixed
+- **Blank/DPMS panel stayed dark.** On startup `Fb::open` now issues an
+  `FBIOBLANK` / `FB_BLANK_UNBLANK` ioctl to wake the display before taking the
+  console into graphics mode. If the panel had DPMS-powered-down (e.g. while the
+  service was down or the framebuffer was missing), the CRTC scanout was off, so
+  writes to `/dev/fb0` never reached the screen and the monitor sat "trying to
+  sync." Unblanking re-enables scanout; it's a no-op when already awake.
+
 ## [v0.4.0] — 2026-06-14
 
 ### Added

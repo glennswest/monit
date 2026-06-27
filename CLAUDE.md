@@ -23,7 +23,7 @@ real hostnames or IPs in the source or committed docs.** The repo is public.
   `/etc/systemd/system/monit.service`. See README.
 
 ## Version
-- Current: **0.4.0** (pre-1.0; defined in `Cargo.toml`).
+- Current: **0.4.1** (pre-1.0; defined in `Cargo.toml`).
 
 ## Layout of the code
 - `src/config.rs` — config-file + env loader (keeps infra out of the source).
