@@ -31,6 +31,27 @@ temp_unit = C
 #fan_labels = fan3=Pump,fan7=Rad Fans
 #pump_fan = fan3
 
+# Closed-loop thermal governor (opt-in). When enabled, monit forces the pump
+# PWM to full, drives the radiator-fan PWM on a temperature curve, and holds a
+# CPU temperature band by steering intel_pstate max_perf_pct (auto-throttle on
+# cooling failure, ramp back when cool). The pump channel is taken from
+# pump_fan above (fanN -> pwmN); gov_fan is the dynamic radiator fan.
+# Hardware PROCHOT (~100C) is the final backstop. Default: off.
+#thermal_control = true
+#gov_fan = fan7
+# Radiator-fan curve: duty_lo% at/below temp_lo, ramping to duty_hi% at temp_hi.
+#gov_temp_lo = 50
+#gov_temp_hi = 80
+#gov_duty_lo = 40
+#gov_duty_hi = 100
+# CPU temp band (°C) and floor. gov_cpu=false disables CPU throttling.
+#gov_cpu = true
+#gov_t_ok = 74
+#gov_t_high = 84
+#gov_t_crit = 90
+#gov_t_emerg = 96
+#gov_perf_min = 18
+
 # Overscan inset in pixels, applied on every edge of the Overview. Raise this if
 # the display crops its edges (common on HDMI panels/TVs) and content falls off
 # the visible area. 0 = draw edge-to-edge. Default: 0.

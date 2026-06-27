@@ -48,6 +48,7 @@ pub struct Power {
     pub pkg_max_w: f64,    // RAPL hardware max power range (stock TDP ceiling), 0 if unknown
     pub freq_mhz: u64,     // average current core frequency
     pub freq_max_mhz: u64, // advertised max (turbo) frequency
+    pub perf_pct: u64,     // intel_pstate max_perf_pct (100 = full; <100 = capped), 0 if unknown
 }
 
 impl Power {
@@ -513,6 +514,7 @@ fn local_power(dom: Option<&RaplDomain>, e1: Option<u64>, e2: Option<u64>, ms: u
         p.freq_mhz = sum / count as u64;
     }
     p.freq_max_mhz = max;
+    p.perf_pct = read_u64("/sys/devices/system/cpu/intel_pstate/max_perf_pct").unwrap_or(0);
     p
 }
 

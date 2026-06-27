@@ -10,6 +10,7 @@ mod collect;
 mod config;
 mod fb;
 mod font;
+mod governor;
 mod history;
 mod ui;
 
@@ -62,10 +63,31 @@ fn main() {
 
     // Fan naming: friendly labels for unlabeled hwmon channels + which is the
     // pump (watched for stalls). E.g. fan_labels="fan3=Pump,fan7=Rad" pump_fan=fan3.
+    let pump_fan = cfg.opt("pump_fan", "MONIT_PUMP_FAN").unwrap_or_default();
     collect::set_fan_cfg(collect::FanCfg::parse(
         &cfg.opt("fan_labels", "MONIT_FAN_LABELS").unwrap_or_default(),
-        &cfg.opt("pump_fan", "MONIT_PUMP_FAN").unwrap_or_default(),
+        &pump_fan,
     ));
+
+    // Optional closed-loop thermal governor (pump full + dynamic radiator fan +
+    // CPU temp-band via intel_pstate). Opt-in; PWM channels derive "fanN"->"pwmN".
+    let to_pwm = |s: String| s.replace("fan", "pwm");
+    governor::serve(governor::GovConfig {
+        enabled: cfg.parse("thermal_control", "MONIT_THERMAL_CONTROL", false),
+        cpu_govern: cfg.parse("gov_cpu", "MONIT_GOV_CPU", true),
+        t_ok: cfg.parse("gov_t_ok", "MONIT_GOV_T_OK", 74),
+        t_high: cfg.parse("gov_t_high", "MONIT_GOV_T_HIGH", 84),
+        t_crit: cfg.parse("gov_t_crit", "MONIT_GOV_T_CRIT", 90),
+        t_emerg: cfg.parse("gov_t_emerg", "MONIT_GOV_T_EMERG", 96),
+        perf_min: cfg.parse("gov_perf_min", "MONIT_GOV_PERF_MIN", 18),
+        pump_pwm: to_pwm(pump_fan),
+        fan_pwm: to_pwm(cfg.opt("gov_fan", "MONIT_GOV_FAN").unwrap_or_default()),
+        fan_temp_lo: cfg.parse("gov_temp_lo", "MONIT_GOV_TEMP_LO", 50),
+        fan_temp_hi: cfg.parse("gov_temp_hi", "MONIT_GOV_TEMP_HI", 80),
+        fan_duty_lo: cfg.parse("gov_duty_lo", "MONIT_GOV_DUTY_LO", 40),
+        fan_duty_hi: cfg.parse("gov_duty_hi", "MONIT_GOV_DUTY_HI", 100),
+        interval_s: cfg.parse("gov_interval", "MONIT_GOV_INTERVAL", 2),
+    });
 
     // REST API for app-pushed pages + power control. Empty/"off" bind disables.
     let store = api::new_store();

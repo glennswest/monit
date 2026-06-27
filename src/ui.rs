@@ -667,10 +667,15 @@ fn draw_half(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, _h: usize, ho
 /// stock TDP is just normal protection and is shown calmly.
 fn cpu_limit(host: &Host) -> (Color, String) {
     let p = &host.power;
+    // Strongest signal first: the thermal governor capping CPU performance
+    // (intel_pstate max_perf_pct < 100) — the CPU is being actively throttled.
+    if p.perf_pct > 0 && p.perf_pct < 100 {
+        return (YELLOW, format!("THROTTLED perf {}% (thermal gov)", p.perf_pct));
+    }
     if !p.known() || p.pkg_limit_w <= 0.0 {
         return (DIM, "RAPL n/a".to_string());
     }
-    // Imposed throttle: cap held meaningfully below the hardware max.
+    // Imposed RAPL throttle: cap held meaningfully below the hardware max.
     if p.pkg_max_w > 0.0 && p.pkg_limit_w < p.pkg_max_w * 0.98 {
         return (YELLOW, format!("THROTTLED {:.0}/{:.0} W", p.pkg_limit_w, p.pkg_max_w));
     }

@@ -23,7 +23,7 @@ real hostnames or IPs in the source or committed docs.** The repo is public.
   `/etc/systemd/system/monit.service`. See README.
 
 ## Version
-- Current: **0.5.0** (pre-1.0; defined in `Cargo.toml`).
+- Current: **0.6.0** (pre-1.0; defined in `Cargo.toml`).
 
 ## Layout of the code
 - `src/config.rs` — config-file + env loader (keeps infra out of the source).
@@ -35,6 +35,8 @@ real hostnames or IPs in the source or committed docs.** The repo is public.
 - `src/history.rs` — ring buffers feeding the graphs.
 - `src/api.rs` — REST server (background thread) + declarative page model for
   app-pushed pages (TTL store, optional bearer token).
+- `src/governor.rs` — opt-in closed-loop thermal governor (background thread):
+  pump full + dynamic radiator-fan curve + CPU temp-band via intel_pstate.
 - `src/ui.rs` — page enum + per-page rendering (Mem/Cpu/Temp/Disk/Gpu/Ai/Logs)
   + app-pushed widget rendering; `Screen` rotation type.
 - `src/main.rs` — config, signal handling, API startup, page rotation, loop.

@@ -8,6 +8,8 @@ After=getty@tty1.service
 
 [Service]
 Type=simple
+# Ensure the Super I/O sensor/fan driver is present for the thermal governor.
+ExecStartPre=-/sbin/modprobe nct6775
 ExecStart=/usr/local/bin/monit
 # Site-specific settings live here (hostnames, ssh target). Not in the repo.
 Environment=MONIT_CONFIG=/etc/monit/monit.conf

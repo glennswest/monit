@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+### 2026-06-27 (governor)
+- **feat:** Built-in **closed-loop thermal governor** (`governor.rs`, opt-in via
+  `thermal_control`) — folds the standalone adaptive-thermal.sh into monit.
+  Forces the AIO **pump to full**, drives the **radiator fan on a temperature
+  curve** (dynamic/quieter, configurable `gov_temp_lo/hi` + `gov_duty_lo/hi`),
+  and holds a **CPU temperature band** via intel_pstate `max_perf_pct`
+  (auto-throttle on cooling failure, ramp back when cool; `gov_t_*`, `gov_perf_min`).
+  PROCHOT (~100 °C) remains the hardware backstop; `monit.service` runs
+  `Restart=always` and now `modprobe nct6775` on start.
+- **feat:** CPU **LIMITING** line shows governor throttling — `intel_pstate
+  max_perf_pct` is collected (`Power.perf_pct`); when <100 the line reads
+  `THROTTLED perf N% (thermal gov)`.
+
 ### 2026-06-27
 - **feat:** New **Overview** pane is the sole default view (rotation dropped),
   drawn full-screen with no title bar/banner. One unified screen split by a thin
