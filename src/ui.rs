@@ -18,6 +18,33 @@ pub static FAHRENHEIT: AtomicBool = AtomicBool::new(false);
 /// falls off the visible area.
 pub static OVERSCAN: AtomicUsize = AtomicUsize::new(0);
 
+/// Explicit drawable viewport for the overview (set from MONIT_VIEW_*). When a
+/// panel shows only part of the framebuffer (e.g. it scales the left region to
+/// full width), point the overview at exactly the visible rectangle. A zero
+/// width or height means "use the full framebuffer" (minus OVERSCAN).
+pub static VIEW_X: AtomicUsize = AtomicUsize::new(0);
+pub static VIEW_Y: AtomicUsize = AtomicUsize::new(0);
+pub static VIEW_W: AtomicUsize = AtomicUsize::new(0);
+pub static VIEW_H: AtomicUsize = AtomicUsize::new(0);
+
+/// Resolve the overview's drawable rectangle: an explicit viewport if set,
+/// otherwise the full framebuffer inset by OVERSCAN.
+fn overview_rect(fbw: usize, fbh: usize) -> (isize, isize, usize, usize) {
+    let (vw, vh) = (VIEW_W.load(Ordering::Relaxed), VIEW_H.load(Ordering::Relaxed));
+    if vw > 0 || vh > 0 {
+        let x = VIEW_X.load(Ordering::Relaxed).min(fbw.saturating_sub(1));
+        let y = VIEW_Y.load(Ordering::Relaxed).min(fbh.saturating_sub(1));
+        let w = if vw > 0 { vw.min(fbw - x) } else { fbw - x };
+        let h = if vh > 0 { vh.min(fbh - y) } else { fbh - y };
+        (x as isize, y as isize, w.max(200), h.max(200))
+    } else {
+        let ov = OVERSCAN.load(Ordering::Relaxed);
+        let w = fbw.saturating_sub(2 * ov).max(200);
+        let h = fbh.saturating_sub(2 * ov).max(200);
+        (ov as isize, ov as isize, w, h)
+    }
+}
+
 fn fmt_temp(c: f64) -> String {
     if FAHRENHEIT.load(Ordering::Relaxed) {
         format!("{:.0} F", c * 9.0 / 5.0 + 32.0)
@@ -125,11 +152,7 @@ pub fn render(
     // The Overview owns the whole screen — no title bar, dots, or banner. Inset
     // by the overscan margin so the panel's cropped edges don't eat content.
     if matches!(&screen, Screen::Builtin(Page::Overview)) {
-        let ov = OVERSCAN.load(Ordering::Relaxed) as isize;
-        let x = ov;
-        let y = ov;
-        let ww = (fb.w as isize - 2 * ov).max(200) as usize;
-        let hh = (fb.h as isize - 2 * ov).max(200) as usize;
+        let (x, y, ww, hh) = overview_rect(fb.w, fb.h);
         overview_page(fb, f, x, y, ww, hh, pve, ai, hist, clock);
         return;
     }

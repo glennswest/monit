@@ -13,6 +13,10 @@
   GPU %, CPU temp, GPU temp) with a legend.
 - **feat:** `overscan` config option (px inset on every side) so panels that
   crop their edges still show all content. New `Fb::graph_multi` line-graph.
+- **feat:** `view_x`/`view_y`/`view_w`/`view_h` viewport config — render the
+  overview into an explicit rectangle for panels that display only part of the
+  framebuffer (e.g. a monitor that scales the left region to full width). A zero
+  width/height falls back to the full framebuffer (minus `overscan`).
 - **feat:** RAPL hardware max (`pkg_max_w`) collected; the CPU LIMITING line now
   distinguishes stock-TDP protection (shown calmly) from an imposed throttle
   (cap held below the hardware max — flagged), instead of alarming at normal TDP.

@@ -29,6 +29,16 @@ temp_unit = C
 # the visible area. 0 = draw edge-to-edge. Default: 0.
 #overscan = 48
 
+# Explicit drawable viewport for the Overview, in framebuffer pixels. Use this
+# when the panel shows only PART of the framebuffer (e.g. it scales the left
+# region to fill the screen) — point the overview at exactly the visible
+# rectangle. A zero width or height falls back to the full framebuffer (minus
+# overscan). Example: a panel showing only the left ~1040px, full height:
+#view_x = 0
+#view_y = 0
+#view_w = 1040
+#view_h = 0
+
 # REST API for app-pushed pages. Bind address for the HTTP listener; set to
 # "off" (or leave empty) to disable the API entirely. Default 0.0.0.0:9090.
 api_bind = 0.0.0.0:9090
