@@ -211,6 +211,28 @@ impl Fb {
         self.frame(x, y, w, h, border);
     }
 
+    /// Overlay several 0..1 series as colored lines on one set of axes (newest
+    /// sample at the right edge). Used by the overview's combined graph.
+    pub fn graph_multi(&mut self, x: isize, y: isize, w: usize, h: usize, series: &[(Vec<f64>, Color)], track: Color, border: Color) {
+        self.rect(x, y, w, h, track);
+        for g in [0.25f64, 0.5, 0.75] {
+            let gy = y + h as isize - 1 - (g * (h as f64 - 2.0)) as isize;
+            self.rect(x + 1, gy, w.saturating_sub(2), 1, border);
+        }
+        let inner_h = h.saturating_sub(2) as f64;
+        for (s, clr) in series {
+            let n = s.len();
+            let vis = if n > w { &s[n - w..] } else { &s[..] };
+            let off = w.saturating_sub(vis.len());
+            for (i, &v) in vis.iter().enumerate() {
+                let col = x + (off + i) as isize;
+                let py = y + h as isize - 1 - (v.clamp(0.0, 1.0) * inner_h) as isize;
+                self.rect(col, py - 1, 1, 2, *clr); // 2px-thick point reads as a line
+            }
+        }
+        self.frame(x, y, w, h, border);
+    }
+
     /// Flush the double buffer to the framebuffer device, honoring stride.
     pub fn present(&self) {
         let row_bytes = self.w * 4;

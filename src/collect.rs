@@ -45,6 +45,7 @@ pub struct Cpu {
 pub struct Power {
     pub pkg_w: f64,        // current package power draw (RAPL), 0 if unknown
     pub pkg_limit_w: f64,  // RAPL long-term power cap, 0 if unknown
+    pub pkg_max_w: f64,    // RAPL hardware max power range (stock TDP ceiling), 0 if unknown
     pub freq_mhz: u64,     // average current core frequency
     pub freq_max_mhz: u64, // advertised max (turbo) frequency
 }
@@ -467,6 +468,9 @@ fn local_power(dom: Option<&RaplDomain>, e1: Option<u64>, e2: Option<u64>, ms: u
         }
         if let Some(uw) = read_u64(&d.limit_path) {
             p.pkg_limit_w = uw as f64 / 1_000_000.0;
+        }
+        if let Some(uw) = read_u64(&format!("{}/constraint_0_max_power_uw", d.base)) {
+            p.pkg_max_w = uw as f64 / 1_000_000.0;
         }
     }
     let (sum, count, max) = cpu_freqs();

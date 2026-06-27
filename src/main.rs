@@ -54,6 +54,8 @@ fn main() {
     let top: usize = cfg.parse("top", "MONIT_TOP", 8);
     let unit = cfg.string("temp_unit", "MONIT_TEMP_UNIT", "C");
     ui::FAHRENHEIT.store(unit.eq_ignore_ascii_case("F"), std::sync::atomic::Ordering::Relaxed);
+    let overscan: usize = cfg.parse("overscan", "MONIT_OVERSCAN", 0);
+    ui::OVERSCAN.store(overscan, Ordering::Relaxed);
 
     // REST API for app-pushed pages + power control. Empty/"off" bind disables.
     let store = api::new_store();

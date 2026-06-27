@@ -24,6 +24,11 @@ top = 8
 # Temperature unit: C or F.
 temp_unit = C
 
+# Overscan inset in pixels, applied on every edge of the Overview. Raise this if
+# the display crops its edges (common on HDMI panels/TVs) and content falls off
+# the visible area. 0 = draw edge-to-edge. Default: 0.
+#overscan = 48
+
 # REST API for app-pushed pages. Bind address for the HTTP listener; set to
 # "off" (or leave empty) to disable the API entirely. Default 0.0.0.0:9090.
 api_bind = 0.0.0.0:9090

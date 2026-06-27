@@ -7,11 +7,16 @@ use crate::collect::{Gpu, Host, Mem};
 use crate::fb::{rgb, Color, Fb};
 use crate::font::Font;
 use crate::history::History;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Display temperatures in Fahrenheit (set from MONIT_TEMP_UNIT). Sensor values
 /// and color thresholds stay in Celsius internally; only the label converts.
 pub static FAHRENHEIT: AtomicBool = AtomicBool::new(false);
+
+/// Overscan inset in pixels (set from MONIT_OVERSCAN). Many HDMI panels crop the
+/// edges; the overview insets all drawing by this much on every side so nothing
+/// falls off the visible area.
+pub static OVERSCAN: AtomicUsize = AtomicUsize::new(0);
 
 fn fmt_temp(c: f64) -> String {
     if FAHRENHEIT.load(Ordering::Relaxed) {
@@ -115,7 +120,20 @@ pub fn render(
     let w = fb.w as isize;
     let margin = 40isize;
 
-    let screen = screens.get(idx).cloned().unwrap_or(Screen::Builtin(Page::Mem));
+    let screen = screens.get(idx).cloned().unwrap_or(Screen::Builtin(Page::Overview));
+
+    // The Overview owns the whole screen — no title bar, dots, or banner. Inset
+    // by the overscan margin so the panel's cropped edges don't eat content.
+    if matches!(&screen, Screen::Builtin(Page::Overview)) {
+        let ov = OVERSCAN.load(Ordering::Relaxed) as isize;
+        let x = ov;
+        let y = ov;
+        let ww = (fb.w as isize - 2 * ov).max(200) as usize;
+        let hh = (fb.h as isize - 2 * ov).max(200) as usize;
+        overview_page(fb, f, x, y, ww, hh, pve, ai, hist, clock);
+        return;
+    }
+
     let page_title = match &screen {
         Screen::Builtin(p) => p.title().to_string(),
         Screen::Pushed(id) => store
@@ -179,10 +197,7 @@ pub fn render(
     };
 
     match page {
-        Page::Overview => {
-            overview_panel(fb, f, lx, top, pw, h, pve, hist, Role::Cpu);
-            overview_panel(fb, f, rx, top, pw, h, ai, hist, Role::Gpu);
-        }
+        Page::Overview => {} // handled above (full-screen, no chrome)
         Page::Gpu => {
             let fw = (w - 2 * margin) as usize;
             panel_bg(fb, lx, top, fw, h);
@@ -508,105 +523,135 @@ enum Role {
     Gpu,
 }
 
-fn overview_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, host: &Host, hist: &History, role: Role) {
-    panel_bg(fb, x, y, w, h);
-    let pad = 26isize;
-    let ix = x + pad;
-    let iw = w as isize - 2 * pad;
+/// Full-screen overview: CPU (left) and GPU (right) as one unified screen with
+/// a thin divider, big USAGE/TEMP numbers, memory bars, limit + cooling status,
+/// and a single combined history graph (colored lines) across the bottom.
+fn overview_page(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, pve: &Host, ai: &Host, hist: &History, clock: &str) {
+    let cx = x + w as isize / 2; // divider center
+    let colpad = 26isize;
+    let half_w = (w as isize / 2 - colpad - colpad / 2).max(100);
+    let lx = x + colpad;
+    let rx = cx + colpad / 2;
 
-    // Header: status dot + "label · CPU/GPU".
+    // Bottom band: legend + combined graph.
+    let legend_h = 24isize;
+    let graph_h = 210isize;
+    let stats_h = (h as isize - graph_h - legend_h - 24).max(120);
+
+    draw_half(fb, f, lx, y + 8, half_w as usize, stats_h as usize, pve, Role::Cpu);
+    draw_half(fb, f, rx, y + 8, half_w as usize, stats_h as usize, ai, Role::Gpu);
+
+    // Thin vertical divider instead of two separate boxes.
+    fb.rect(cx - 1, y + 16, 2, (stats_h - 16).max(20) as usize, BORDER);
+
+    // Combined graph — newest at the right. All series share a 0..1 axis
+    // (utilizations as fractions, temps as °C/100), so they're comparable.
+    let gy = y + 8 + stats_h + 8;
+    let series = vec![
+        (hist.pve_cpu.slice(), ACCENT),
+        (hist.gpu_util.slice(), GPU_CLR),
+        (hist.pve_temp.slice(), POWER_CLR),
+        (hist.gpu_temp.slice(), RED),
+    ];
+    fb.graph_multi(x, gy, w, graph_h as usize, &series, TRACK, BORDER);
+
+    // Legend across the bottom; clock right-aligned on the same line.
+    let ly = gy + graph_h + 6;
+    let items = [("CPU %", ACCENT), ("GPU %", GPU_CLR), ("CPU temp", POWER_CLR), ("GPU temp", RED)];
+    let mut lxp = x;
+    for (label, clr) in items {
+        fb.rect(lxp, ly + 2, 18, 12, clr);
+        fb.text(&f.small, lxp + 24, ly, 1, DIM, label);
+        lxp += 24 + Fb::text_w(&f.small, 1, label) + 34;
+    }
+    let cw = Fb::text_w(&f.small, 1, clock);
+    fb.text(&f.small, x + w as isize - cw, ly, 1, DIM, clock);
+}
+
+/// One side of the overview (CPU or GPU): status dot + role tag, big USAGE and
+/// TEMP numbers, a memory/VRAM bar, a limit line, and a boxed cooling verdict.
+fn draw_half(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, _h: usize, host: &Host, role: Role) {
+    let iw = w as isize;
     let dot = if host.ok { GREEN } else { RED };
-    fb.rect(ix, y + pad + 6, 16, 16, dot);
+    fb.rect(x, y + 6, 16, 16, dot);
     let rl = if role == Role::Cpu { "CPU" } else { "GPU" };
-    fb.text(&f.big, ix + 28, y + pad, 1, TEXT, &format!("{}  ·  {}", host.label, rl));
-    let mut cy = y + pad + 52;
+    fb.text(&f.big, x + 28, y, 1, DIM, rl);
+    let mut cy = y + 50;
 
     if !host.ok {
-        fb.text(&f.small, ix, cy + 16, 2, RED, "OFFLINE");
+        fb.text(&f.big, x, cy + 10, 2, RED, "OFFLINE");
         let msg = if host.err.is_empty() { "unreachable" } else { &host.err };
-        fb.text(&f.small, ix, cy + 56, 1, DIM, msg);
+        fb.text(&f.small, x, cy + 70, 1, DIM, msg);
         return;
     }
     let gpu = host.gpus.first();
     if role == Role::Gpu && gpu.is_none() {
-        fb.text(&f.small, ix, cy + 16, 1, DIM, "no GPU reported by host");
+        fb.text(&f.big, x, cy + 10, 1, DIM, "no GPU reported");
         return;
     }
 
-    // Role-specific metrics.
-    let (usage, usage_series, temp, temp_series, mem_used_gb, mem_total_gb, mem_frac, mem_label) = match role {
+    let (usage, temp, mem_used_gb, mem_total_gb, mem_frac, mem_label) = match role {
         Role::Cpu => (
-            host.cpu.overall, hist.pve_cpu.slice(), host.max_temp(), hist.pve_temp.slice(),
+            host.cpu.overall, host.max_temp(),
             gb(host.mem.used_kb()), gb(host.mem.total_kb), host.mem.frac(), "MEMORY",
         ),
         Role::Gpu => {
             let g = gpu.unwrap();
-            (
-                g.util as f64 / 100.0, hist.gpu_util.slice(), g.temp_c, hist.gpu_temp.slice(),
-                g.used_mb as f64 / 1024.0, g.total_mb as f64 / 1024.0, g.frac(), "VRAM",
-            )
+            (g.util as f64 / 100.0, g.temp_c, g.used_mb as f64 / 1024.0, g.total_mb as f64 / 1024.0, g.frac(), "VRAM")
         }
     };
 
-    // Two big numbers: USAGE (left half) and TEMP (right half).
-    let half = iw / 2;
-    let tx = ix + half + 10;
-    fb.text(&f.small, ix, cy, 1, DIM, "USAGE");
-    fb.text(&f.small, tx, cy, 1, DIM, "TEMP");
-    fb.text(&f.big, ix, cy + 20, 3, level_color(usage), &format!("{:.0}%", usage * 100.0));
-    fb.text(&f.big, tx, cy + 20, 3, temp_color(temp), &fmt_temp(temp));
-    cy += 20 + 96 + 14;
+    // Big USAGE (left) and TEMP (right of this half).
+    let thalf = iw / 2;
+    fb.text(&f.small, x, cy, 1, DIM, "USAGE");
+    fb.text(&f.small, x + thalf, cy, 1, DIM, "TEMP");
+    fb.text(&f.big, x, cy + 20, 3, level_color(usage), &format!("{:.0}%", usage * 100.0));
+    fb.text(&f.big, x + thalf, cy + 20, 3, temp_color(temp), &fmt_temp(temp));
+    cy += 20 + 96 + 22;
 
-    // Usage graph under USAGE, temp graph under TEMP.
-    let gw = (half - 10).max(40) as usize;
-    let gh = 150usize;
-    fb.graph(ix, cy, gw, gh, &usage_series, level_color(usage), GRID, TRACK, BORDER);
-    fb.graph(tx, cy, gw, gh, &temp_series, RED, GRID, TRACK, BORDER);
-    cy += gh as isize + 18;
-
-    // Memory / VRAM bar (full width).
-    fb.text(&f.small, ix, cy, 1, DIM, mem_label);
+    // Memory / VRAM bar.
+    fb.text(&f.small, x, cy, 1, DIM, mem_label);
     let memval = format!("{:.1} / {:.1} GB   {:.0}%", mem_used_gb, mem_total_gb, mem_frac * 100.0);
-    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &memval), cy, 1, TEXT, &memval);
+    fb.text(&f.small, x + iw - Fb::text_w(&f.small, 1, &memval), cy, 1, TEXT, &memval);
     cy += 22;
-    fb.bar(ix, cy, iw as usize, 28, mem_frac, level_color(mem_frac), TRACK, BORDER);
-    cy += 42;
+    fb.bar(x, cy, iw as usize, 28, mem_frac, level_color(mem_frac), TRACK, BORDER);
+    cy += 48;
 
-    // "Are we limiting?" line.
+    // Limit / throttle line.
     let (limit_clr, limit_text) = match role {
         Role::Cpu => cpu_limit(host),
         Role::Gpu => gpu_limit(gpu.unwrap()),
     };
-    fb.text(&f.small, ix, cy, 1, DIM, "LIMITING");
-    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &limit_text), cy, 1, limit_clr, &limit_text);
-    cy += 30;
+    fb.text(&f.small, x, cy, 1, DIM, "LIMITING");
+    fb.text(&f.small, x + iw - Fb::text_w(&f.small, 1, &limit_text), cy, 1, limit_clr, &limit_text);
+    cy += 32;
 
-    // Cooling status — the headline worry. Boxed + colored so a failure pops:
-    // dim "COOLING" label on the left, big colored verdict right-aligned.
+    // Cooling verdict — boxed and colored so a failure is unmissable.
     let (cool_clr, cool_text) = match role {
         Role::Cpu => cpu_cooling(host),
         Role::Gpu => gpu_cooling(gpu.unwrap()),
     };
-    let bh = 40usize;
-    fb.frame(ix, cy, iw as usize, bh, cool_clr);
-    fb.text(&f.small, ix + 12, cy + 14, 1, DIM, "COOLING");
+    let bh = 44usize;
+    fb.frame(x, cy, iw as usize, bh, cool_clr);
+    fb.text(&f.small, x + 12, cy + 16, 1, DIM, "COOLING");
     let cv = Fb::text_w(&f.big, 1, &cool_text);
-    fb.text(&f.big, ix + iw - cv - 12, cy + 4, 1, cool_clr, &cool_text);
+    fb.text(&f.big, x + iw - cv - 12, cy + 6, 1, cool_clr, &cool_text);
 }
 
-/// CPU power-cap / throttle status from RAPL.
+/// CPU power-cap status from RAPL. Only flags when the long-term cap has been
+/// lowered below the hardware max (an imposed throttle); a cap sitting at the
+/// stock TDP is just normal protection and is shown calmly.
 fn cpu_limit(host: &Host) -> (Color, String) {
     let p = &host.power;
     if !p.known() || p.pkg_limit_w <= 0.0 {
         return (DIM, "RAPL n/a".to_string());
     }
-    let frac = p.frac();
-    let base = format!("pkg {:.0}/{:.0} W", p.pkg_w, p.pkg_limit_w);
-    if frac >= 0.95 {
-        (YELLOW, format!("POWER CAPPED · {}", base))
-    } else {
-        (DIM, format!("{} · headroom", base))
+    // Imposed throttle: cap held meaningfully below the hardware max.
+    if p.pkg_max_w > 0.0 && p.pkg_limit_w < p.pkg_max_w * 0.98 {
+        return (YELLOW, format!("THROTTLED {:.0}/{:.0} W", p.pkg_limit_w, p.pkg_max_w));
     }
+    // Stock TDP — protection only, not limiting performance.
+    (DIM, format!("TDP {:.0} W · {:.0} W draw", p.pkg_limit_w, p.pkg_w))
 }
 
 /// GPU throttle status from nvidia-smi clocks_throttle_reasons.

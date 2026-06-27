@@ -3,12 +3,19 @@
 ## [Unreleased]
 
 ### 2026-06-27
-- **feat:** New **Overview** pane is now the sole default view (rotation
-  dropped). Two columns — pve **CPU** and ai **GPU** — each showing big USAGE %
-  and TEMP numbers, usage+temp history graphs, a memory/VRAM bar, a **LIMITING**
-  line (CPU RAPL cap proximity / GPU throttle reasons), and a prominent boxed
+- **feat:** New **Overview** pane is the sole default view (rotation dropped),
+  drawn full-screen with no title bar/banner. One unified screen split by a thin
+  divider — **CPU** (left) and **GPU** (right) — each with big USAGE % and TEMP
+  numbers, a memory/VRAM bar, a **LIMITING** line, and a prominent boxed
   **COOLING** verdict that calls out a stopped AIO pump (`PUMP STOPPED!`) or a
-  GPU `THERMAL THROTTLE!` so a cooling failure is obvious at a glance.
+  GPU `THERMAL THROTTLE!` so a cooling failure is obvious at a glance. A single
+  combined history graph across the bottom overlays four colored lines (CPU %,
+  GPU %, CPU temp, GPU temp) with a legend.
+- **feat:** `overscan` config option (px inset on every side) so panels that
+  crop their edges still show all content. New `Fb::graph_multi` line-graph.
+- **feat:** RAPL hardware max (`pkg_max_w`) collected; the CPU LIMITING line now
+  distinguishes stock-TDP protection (shown calmly) from an imposed throttle
+  (cap held below the hardware max — flagged), instead of alarming at normal TDP.
 - **feat:** `video=HDMI-A-1:1920x1080@60e` documented as the host-side fix for a
   framebuffer that won't scan out after cold-booting with no panel attached
   (forces the display pipe up at init regardless of attach state).
