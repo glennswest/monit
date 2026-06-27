@@ -551,9 +551,7 @@ enum Role {
 const BLACK: Color = rgb(0, 0, 0);
 const LC_ORANGE: Color = rgb(255, 153, 0);
 const LC_TAN: Color = rgb(255, 204, 153);
-const LC_LILAC: Color = rgb(204, 153, 204);
-const LC_PEACH: Color = rgb(255, 170, 128);
-// Two device colors used across BOTH graphs so one legend covers everything.
+// Two device colors: each section/graph is colored by device.
 const LC_CPU: Color = rgb(120, 180, 255); // ice blue
 const LC_GPU: Color = rgb(255, 150, 40); // amber
 
@@ -580,50 +578,44 @@ fn overview_page(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize,
     lcars_panel(fb, f, x, by, w, panel_h, hist, clock);
 }
 
-/// LCARS history panel: header bar, a sidebar that doubles as the CPU/GPU color
-/// legend, and two stacked graphs (THERMAL °C, PERFORMANCE %) over time. CPU is
-/// one color and GPU another across both graphs, so the sidebar legend says all.
+/// LCARS history panel: header bar over two device sections — CPU (left) and
+/// GPU (right) — each with a colored header pill and PERF + MEMORY graphs over
+/// time. Colored by device: CPU = ice blue, GPU = amber.
 fn lcars_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, hist: &History, clock: &str) {
     let wi = w as isize;
     fb.rect(x, y, w, h, BLACK);
 
-    let head_h = 34isize;
+    let head_h = 30isize;
     let gap = 10isize;
-    let side_w = 92isize;
 
     // Header bar (rounded), title left + clock right, in LCARS orange.
     fb.fill_round(x, y, w, head_h as usize, head_h as usize / 2, LC_ORANGE);
-    fb.text(&f.big, x + 26, y + 1, 1, BLACK, "LCARS // SENSOR HISTORY");
-    fb.text(&f.small, x + wi - Fb::text_w(&f.small, 1, clock) - 24, y + 9, 1, BLACK, clock);
+    fb.text(&f.big, x + 24, y - 1, 1, BLACK, "LCARS // SYSTEMS");
+    fb.text(&f.small, x + wi - Fb::text_w(&f.small, 1, clock) - 22, y + 7, 1, BLACK, clock);
 
     let body_y = y + head_h + gap;
     let body_h = (y + h as isize - body_y).max(40);
+    let col_gap = 16isize;
+    let col_w = ((wi - col_gap) / 2).max(60);
 
-    // Sidebar: top two blocks ARE the legend (CPU / GPU colors); rest is LCARS
-    // filler for the look.
-    let blocks = [(LC_CPU, "CPU"), (LC_GPU, "GPU"), (LC_LILAC, "SYS"), (LC_PEACH, "47")];
-    let n = blocks.len() as isize;
-    let sgap = 8isize;
-    let bh = (body_h - (n - 1) * sgap) / n;
-    for (i, (c, lbl)) in blocks.iter().enumerate() {
-        let yb = body_y + i as isize * (bh + sgap);
-        fb.fill_round(x, yb, side_w as usize, bh.max(8) as usize, 14, *c);
-        fb.text(&f.small, x + 16, yb + bh - 22, 1, BLACK, lbl);
-    }
+    device_col(fb, f, x, body_y, col_w as usize, body_h as usize, "CPU", LC_CPU,
+        ("PERF  %", hist.pve_cpu.slice()), ("MEMORY  %", hist.pve_mem.slice()));
+    device_col(fb, f, x + col_w + col_gap, body_y, col_w as usize, body_h as usize, "GPU", LC_GPU,
+        ("PERF  %", hist.gpu_util.slice()), ("VRAM  %", hist.gpu_mem.slice()));
+}
 
-    // Two stacked graphs to the right of the sidebar. CPU=ice, GPU=amber in both.
-    let gx = x + side_w + gap;
-    let gw = (x + wi - gx).max(40) as usize;
-    let gh = ((body_h - gap) / 2).max(40) as usize;
-
-    lcars_graph(
-        fb, f, gx, body_y, gw, gh, "THERMAL  C",
-        &[(hist.pve_temp.slice(), LC_CPU), (hist.gpu_temp.slice(), LC_GPU)],
-    );
-    lcars_graph(
-        fb, f, gx, body_y + gh as isize + gap, gw, gh, "PERFORMANCE  %",
-        &[(hist.pve_cpu.slice(), LC_CPU), (hist.gpu_util.slice(), LC_GPU)],
-    );
+/// One device section: a colored header pill (also the legend) above two stacked
+/// graphs, all in the device's color.
+fn device_col(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, name: &str, clr: Color, g1: (&str, Vec<f64>), g2: (&str, Vec<f64>)) {
+    // Device header pill.
+    let ph = 24isize;
+    fb.fill_round(x, y, w, ph as usize, ph as usize / 2, clr);
+    fb.text(&f.small, x + 16, y + 5, 1, BLACK, name);
+    // Two stacked graphs filling the rest.
+    let gy = y + ph + 8;
+    let gh = (((y + h as isize - gy) - 8) / 2).max(36) as usize;
+    lcars_graph(fb, f, x, gy, w, gh, g1.0, &[(g1.1, clr)]);
+    lcars_graph(fb, f, x, gy + gh as isize + 8, w, gh, g2.0, &[(g2.1, clr)]);
 }
 
 /// One LCARS graph: a colored title tab, the plotted history below, and a bright

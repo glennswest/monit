@@ -5,11 +5,12 @@
 ### 2026-06-27 (LCARS)
 - **feat:** Overview bottom half redrawn as an **LCARS** (Star-Trek-computer)
   history panel — black ground, rounded header bar + sidebar blocks, and two
-  stacked graphs: **THERMAL** (CPU + GPU temp over time) and **PERFORMANCE**
-  (CPU + GPU utilization over time). A single two-color scheme spans both graphs
-  (CPU = ice blue, GPU = amber); the top two sidebar blocks double as the
-  legend. Fits within a bottom margin so nothing runs off-screen. New
+  stacked graphs. Organized as two **device sections** — CPU (left) and GPU
+  (right) — each with a colored header pill and **PERF** + **MEMORY** graphs
+  over time, colored by device (CPU = ice blue, GPU = amber). New
   `Fb::fill_round` rounded-rectangle primitive.
+- **feat:** `view_h` viewport height honored so the overview fits panels that
+  crop the bottom as well as the sides.
 
 ### 2026-06-27 (governor)
 - **feat:** Built-in **closed-loop thermal governor** (`governor.rs`, opt-in via
