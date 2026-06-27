@@ -24,6 +24,13 @@ top = 8
 # Temperature unit: C or F.
 temp_unit = C
 
+# Fan naming. Many Super I/O chips (e.g. nct6798) expose no fan labels, so
+# channels show as "nct6798 fan3" etc. Give them friendly names here, and tell
+# monit which channel is the AIO pump so the COOLING status watches it for a
+# stall (0 rpm). Format: comma-separated stem=name pairs; pump_fan is a stem.
+#fan_labels = fan3=Pump,fan7=Rad Fans
+#pump_fan = fan3
+
 # Overscan inset in pixels, applied on every edge of the Overview. Raise this if
 # the display crops its edges (common on HDMI panels/TVs) and content falls off
 # the visible area. 0 = draw edge-to-edge. Default: 0.

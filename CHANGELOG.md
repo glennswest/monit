@@ -20,6 +20,10 @@
 - **feat:** RAPL hardware max (`pkg_max_w`) collected; the CPU LIMITING line now
   distinguishes stock-TDP protection (shown calmly) from an imposed throttle
   (cap held below the hardware max — flagged), instead of alarming at normal TDP.
+- **feat:** `fan_labels` + `pump_fan` config so boards whose Super I/O exposes no
+  fan labels (e.g. nct6798) can name channels and designate the AIO pump. The
+  COOLING verdict now watches the configured pump channel for a stall (0 rpm)
+  instead of relying on a "pump" label that such boards never provide.
 - **feat:** `video=HDMI-A-1:1920x1080@60e` documented as the host-side fix for a
   framebuffer that won't scan out after cold-booting with no panel attached
   (forces the display pipe up at init regardless of attach state).

@@ -60,6 +60,13 @@ fn main() {
     ui::VIEW_W.store(cfg.parse("view_w", "MONIT_VIEW_W", 0), Ordering::Relaxed);
     ui::VIEW_H.store(cfg.parse("view_h", "MONIT_VIEW_H", 0), Ordering::Relaxed);
 
+    // Fan naming: friendly labels for unlabeled hwmon channels + which is the
+    // pump (watched for stalls). E.g. fan_labels="fan3=Pump,fan7=Rad" pump_fan=fan3.
+    collect::set_fan_cfg(collect::FanCfg::parse(
+        &cfg.opt("fan_labels", "MONIT_FAN_LABELS").unwrap_or_default(),
+        &cfg.opt("pump_fan", "MONIT_PUMP_FAN").unwrap_or_default(),
+    ));
+
     // REST API for app-pushed pages + power control. Empty/"off" bind disables.
     let store = api::new_store();
     let allow_control = cfg.parse("api_control", "MONIT_API_CONTROL", true);

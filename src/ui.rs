@@ -444,7 +444,8 @@ fn temp_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, ho
 fn aio_block(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: isize, host: &crate::collect::Host) -> isize {
     let p = &host.power;
     let t = host.max_temp();
-    let pump = host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump"));
+    let pump = host.fans.iter().find(|fan| fan.is_pump)
+        .or_else(|| host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump")));
     let pump_rpm = pump.map(|f| f.rpm);
     let frac = p.frac(); // draw / cap (0 if no cap known)
 
@@ -698,7 +699,8 @@ fn gpu_limit(g: &Gpu) -> (Color, String) {
 /// CPU cooling verdict — a stopped pump is an outright failure.
 fn cpu_cooling(host: &Host) -> (Color, String) {
     let t = host.max_temp();
-    let pump = host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump"));
+    let pump = host.fans.iter().find(|fan| fan.is_pump)
+        .or_else(|| host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump")));
     if let Some(p) = pump {
         if p.rpm == 0 {
             return (RED, "PUMP STOPPED!".to_string());

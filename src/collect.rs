@@ -72,10 +72,45 @@ pub struct Temp {
     pub celsius: f64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Fan {
     pub label: String,
     pub rpm: u64,
+    pub is_pump: bool, // designated pump channel (watched for stalls)
+}
+
+/// Site-specific fan naming: friendly labels for unlabeled hwmon channels and
+/// which channel is the AIO pump. Set once at startup from config.
+#[derive(Default)]
+pub struct FanCfg {
+    labels: Vec<(String, String)>, // (hwmon stem e.g. "fan3", friendly name)
+    pump: String,                  // stem or friendly name of the pump channel
+}
+
+impl FanCfg {
+    /// Parse `fan_labels` ("fan3=Pump,fan7=Rad Fans") and `pump_fan` ("fan3").
+    pub fn parse(labels: &str, pump: &str) -> FanCfg {
+        let labels = labels
+            .split(',')
+            .filter_map(|kv| kv.split_once('='))
+            .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        FanCfg { labels, pump: pump.trim().to_string() }
+    }
+    fn friendly(&self, stem: &str) -> Option<&str> {
+        self.labels.iter().find(|(k, _)| k == stem).map(|(_, v)| v.as_str())
+    }
+    fn is_pump(&self, stem: &str, friendly: &str) -> bool {
+        !self.pump.is_empty() && (self.pump == stem || self.pump.eq_ignore_ascii_case(friendly))
+    }
+}
+
+static FAN_CFG: std::sync::OnceLock<FanCfg> = std::sync::OnceLock::new();
+
+/// Install the fan naming config (call once at startup).
+pub fn set_fan_cfg(cfg: FanCfg) {
+    let _ = FAN_CFG.set(cfg);
 }
 
 #[derive(Clone)]
@@ -620,8 +655,18 @@ fn local_fans() -> Vec<Fan> {
             let label = fs::read_to_string(base.join(format!("{stem}_label")))
                 .unwrap_or_default().trim().to_string();
             if let Some(rpm) = rpm {
-                let lbl = if label.is_empty() { format!("{name} {stem}") } else { format!("{name} {label}") };
-                out.push(Fan { label: clip(&lbl, 24), rpm });
+                let cfg = FAN_CFG.get();
+                // Display name: configured friendly label > hwmon label > "name stem".
+                let friendly = cfg.and_then(|c| c.friendly(stem)).map(str::to_string);
+                let lbl = match friendly {
+                    Some(ref fr) => fr.clone(),
+                    None if !label.is_empty() => format!("{name} {label}"),
+                    None => format!("{name} {stem}"),
+                };
+                // Pump: configured channel, else any hwmon label containing "pump".
+                let is_pump = cfg.map(|c| c.is_pump(stem, friendly.as_deref().unwrap_or(""))).unwrap_or(false)
+                    || label.to_lowercase().contains("pump");
+                out.push(Fan { label: clip(&lbl, 24), rpm, is_pump });
             }
         }
     }
@@ -782,7 +827,7 @@ fn parse_remote(h: &mut Host, text: &str, top: usize) {
                     let label = f[1].trim();
                     if let Ok(rpm) = f[2].trim().parse::<u64>() {
                         let lbl = if label.is_empty() { name.to_string() } else { format!("{name} {label}") };
-                        h.fans.push(Fan { label: clip(&lbl, 24), rpm });
+                        h.fans.push(Fan { label: clip(&lbl, 24), rpm, is_pump: false });
                     }
                 }
             }
