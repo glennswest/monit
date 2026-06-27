@@ -34,8 +34,12 @@ const GREEN: Color = rgb(63, 185, 80);
 const YELLOW: Color = rgb(210, 153, 34);
 const RED: Color = rgb(248, 81, 73);
 
+// Overview is the only page in the default rotation; the others are retained
+// (still rendered by `render`) so they can be re-enabled without rewriting them.
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq)]
 pub enum Page {
+    Overview,
     Mem,
     Cpu,
     Temp,
@@ -46,10 +50,12 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 7] =
-        [Page::Mem, Page::Cpu, Page::Temp, Page::Disk, Page::Gpu, Page::Ai, Page::Logs];
+    #[allow(dead_code)]
+    pub const ALL: [Page; 8] =
+        [Page::Overview, Page::Mem, Page::Cpu, Page::Temp, Page::Disk, Page::Gpu, Page::Ai, Page::Logs];
     fn title(self) -> &'static str {
         match self {
+            Page::Overview => "OVERVIEW",
             Page::Mem => "MEMORY",
             Page::Cpu => "CPU",
             Page::Temp => "TEMPERATURES",
@@ -147,9 +153,11 @@ pub fn render(
     let step = (30usize).min(avail / n).max(8);
     let dotw = (step.saturating_sub(8)).max(6);
     let dy = 64isize;
-    for i in 0..screens.len() {
-        let c = if i == idx { ACCENT } else { GRID };
-        fb.rect(margin + (i * step) as isize, dy, dotw, 6, c);
+    if screens.len() > 1 {
+        for i in 0..screens.len() {
+            let c = if i == idx { ACCENT } else { GRID };
+            fb.rect(margin + (i * step) as isize, dy, dotw, 6, c);
+        }
     }
     fb.rect(margin, 78, (w - 2 * margin) as usize, 2, BORDER);
 
@@ -171,6 +179,10 @@ pub fn render(
     };
 
     match page {
+        Page::Overview => {
+            overview_panel(fb, f, lx, top, pw, h, pve, hist, Role::Cpu);
+            overview_panel(fb, f, rx, top, pw, h, ai, hist, Role::Gpu);
+        }
         Page::Gpu => {
             let fw = (w - 2 * margin) as usize;
             panel_bg(fb, lx, top, fw, h);
@@ -481,6 +493,182 @@ fn disk_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, ho
         if cy > y + h as isize - 30 {
             break;
         }
+    }
+}
+
+// --------------------------------------------------------------------------
+// Overview page — CPU (pve) | GPU (ai) side by side. Big usage/temp numbers,
+// usage+temp graphs, a memory bar, an "are we limiting/throttling" line, and a
+// prominent cooling-failure status (stopped pump / thermal throttle).
+// --------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Cpu,
+    Gpu,
+}
+
+fn overview_panel(fb: &mut Fb, f: &Fonts, x: isize, y: isize, w: usize, h: usize, host: &Host, hist: &History, role: Role) {
+    panel_bg(fb, x, y, w, h);
+    let pad = 26isize;
+    let ix = x + pad;
+    let iw = w as isize - 2 * pad;
+
+    // Header: status dot + "label · CPU/GPU".
+    let dot = if host.ok { GREEN } else { RED };
+    fb.rect(ix, y + pad + 6, 16, 16, dot);
+    let rl = if role == Role::Cpu { "CPU" } else { "GPU" };
+    fb.text(&f.big, ix + 28, y + pad, 1, TEXT, &format!("{}  ·  {}", host.label, rl));
+    let mut cy = y + pad + 52;
+
+    if !host.ok {
+        fb.text(&f.small, ix, cy + 16, 2, RED, "OFFLINE");
+        let msg = if host.err.is_empty() { "unreachable" } else { &host.err };
+        fb.text(&f.small, ix, cy + 56, 1, DIM, msg);
+        return;
+    }
+    let gpu = host.gpus.first();
+    if role == Role::Gpu && gpu.is_none() {
+        fb.text(&f.small, ix, cy + 16, 1, DIM, "no GPU reported by host");
+        return;
+    }
+
+    // Role-specific metrics.
+    let (usage, usage_series, temp, temp_series, mem_used_gb, mem_total_gb, mem_frac, mem_label) = match role {
+        Role::Cpu => (
+            host.cpu.overall, hist.pve_cpu.slice(), host.max_temp(), hist.pve_temp.slice(),
+            gb(host.mem.used_kb()), gb(host.mem.total_kb), host.mem.frac(), "MEMORY",
+        ),
+        Role::Gpu => {
+            let g = gpu.unwrap();
+            (
+                g.util as f64 / 100.0, hist.gpu_util.slice(), g.temp_c, hist.gpu_temp.slice(),
+                g.used_mb as f64 / 1024.0, g.total_mb as f64 / 1024.0, g.frac(), "VRAM",
+            )
+        }
+    };
+
+    // Two big numbers: USAGE (left half) and TEMP (right half).
+    let half = iw / 2;
+    let tx = ix + half + 10;
+    fb.text(&f.small, ix, cy, 1, DIM, "USAGE");
+    fb.text(&f.small, tx, cy, 1, DIM, "TEMP");
+    fb.text(&f.big, ix, cy + 20, 3, level_color(usage), &format!("{:.0}%", usage * 100.0));
+    fb.text(&f.big, tx, cy + 20, 3, temp_color(temp), &fmt_temp(temp));
+    cy += 20 + 96 + 14;
+
+    // Usage graph under USAGE, temp graph under TEMP.
+    let gw = (half - 10).max(40) as usize;
+    let gh = 150usize;
+    fb.graph(ix, cy, gw, gh, &usage_series, level_color(usage), GRID, TRACK, BORDER);
+    fb.graph(tx, cy, gw, gh, &temp_series, RED, GRID, TRACK, BORDER);
+    cy += gh as isize + 18;
+
+    // Memory / VRAM bar (full width).
+    fb.text(&f.small, ix, cy, 1, DIM, mem_label);
+    let memval = format!("{:.1} / {:.1} GB   {:.0}%", mem_used_gb, mem_total_gb, mem_frac * 100.0);
+    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &memval), cy, 1, TEXT, &memval);
+    cy += 22;
+    fb.bar(ix, cy, iw as usize, 28, mem_frac, level_color(mem_frac), TRACK, BORDER);
+    cy += 42;
+
+    // "Are we limiting?" line.
+    let (limit_clr, limit_text) = match role {
+        Role::Cpu => cpu_limit(host),
+        Role::Gpu => gpu_limit(gpu.unwrap()),
+    };
+    fb.text(&f.small, ix, cy, 1, DIM, "LIMITING");
+    fb.text(&f.small, ix + iw - Fb::text_w(&f.small, 1, &limit_text), cy, 1, limit_clr, &limit_text);
+    cy += 30;
+
+    // Cooling status — the headline worry. Boxed + colored so a failure pops:
+    // dim "COOLING" label on the left, big colored verdict right-aligned.
+    let (cool_clr, cool_text) = match role {
+        Role::Cpu => cpu_cooling(host),
+        Role::Gpu => gpu_cooling(gpu.unwrap()),
+    };
+    let bh = 40usize;
+    fb.frame(ix, cy, iw as usize, bh, cool_clr);
+    fb.text(&f.small, ix + 12, cy + 14, 1, DIM, "COOLING");
+    let cv = Fb::text_w(&f.big, 1, &cool_text);
+    fb.text(&f.big, ix + iw - cv - 12, cy + 4, 1, cool_clr, &cool_text);
+}
+
+/// CPU power-cap / throttle status from RAPL.
+fn cpu_limit(host: &Host) -> (Color, String) {
+    let p = &host.power;
+    if !p.known() || p.pkg_limit_w <= 0.0 {
+        return (DIM, "RAPL n/a".to_string());
+    }
+    let frac = p.frac();
+    let base = format!("pkg {:.0}/{:.0} W", p.pkg_w, p.pkg_limit_w);
+    if frac >= 0.95 {
+        (YELLOW, format!("POWER CAPPED · {}", base))
+    } else {
+        (DIM, format!("{} · headroom", base))
+    }
+}
+
+/// GPU throttle status from nvidia-smi clocks_throttle_reasons.
+fn gpu_limit(g: &Gpu) -> (Color, String) {
+    let pbase = if g.power_limit_w > 0.0 {
+        format!("{:.0}/{:.0} W", g.power_w, g.power_limit_w)
+    } else {
+        format!("{:.0} W", g.power_w)
+    };
+    if g.throttle.is_empty() {
+        return (DIM, format!("{} · not throttled", pbase));
+    }
+    let why = g.throttle.join(", ");
+    if why.to_lowercase().contains("thermal") {
+        (RED, format!("THERMAL CAP · {}", why))
+    } else {
+        (YELLOW, format!("POWER CAP · {}", why))
+    }
+}
+
+/// CPU cooling verdict — a stopped pump is an outright failure.
+fn cpu_cooling(host: &Host) -> (Color, String) {
+    let t = host.max_temp();
+    let pump = host.fans.iter().find(|fan| fan.label.to_lowercase().contains("pump"));
+    if let Some(p) = pump {
+        if p.rpm == 0 {
+            return (RED, "PUMP STOPPED!".to_string());
+        }
+        if t >= 90.0 {
+            return (RED, format!("HOT {} · pump {}rpm", fmt_temp(t), p.rpm));
+        }
+        if t >= 80.0 {
+            return (YELLOW, format!("WARM · pump {}rpm", p.rpm));
+        }
+        return (GREEN, format!("OK · pump {}rpm", p.rpm));
+    }
+    if t >= 90.0 {
+        (RED, format!("HOT {}", fmt_temp(t)))
+    } else if t >= 80.0 {
+        (YELLOW, "WARM".to_string())
+    } else if t > 0.0 {
+        (GREEN, "OK".to_string())
+    } else {
+        (DIM, "no tach".to_string())
+    }
+}
+
+/// GPU cooling verdict — a thermal throttle means cooling can't keep up.
+fn gpu_cooling(g: &Gpu) -> (Color, String) {
+    let thermal = g.throttle.join(",").to_lowercase().contains("thermal");
+    if thermal {
+        return (RED, "THERMAL THROTTLE!".to_string());
+    }
+    let faninfo = if g.fan_pct > 0 { format!(" · fan {}%", g.fan_pct) } else { String::new() };
+    if g.temp_c >= 87.0 {
+        (RED, format!("HOT {}", fmt_temp(g.temp_c)))
+    } else if g.temp_c >= 80.0 {
+        (YELLOW, format!("WARM{}", faninfo))
+    } else if g.temp_c > 0.0 {
+        (GREEN, format!("OK{}", faninfo))
+    } else {
+        (DIM, "n/a".to_string())
     }
 }
 

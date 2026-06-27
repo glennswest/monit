@@ -98,15 +98,9 @@ fn main() {
         let ai = collect::remote(&ai_label, &ai_host, top);
         hist.record(&pve, &ai);
 
-        // Build the rotation: built-in pages (Logs dropped when both hosts have
-        // no recent errors) followed by any live app-pushed pages.
-        let mut screens: Vec<Screen> = Vec::new();
-        for p in Page::ALL {
-            if p == Page::Logs && pve.logs.is_empty() && ai.logs.is_empty() {
-                continue;
-            }
-            screens.push(Screen::Builtin(p));
-        }
+        // Single consolidated Overview pane (CPU + GPU usage/mem/temp + limit &
+        // cooling status). App-pushed pages, if any, join the rotation after it.
+        let mut screens: Vec<Screen> = vec![Screen::Builtin(Page::Overview)];
         for id in api::active_ids(&store, Instant::now()) {
             screens.push(Screen::Pushed(id));
         }

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### 2026-06-27
+- **feat:** New **Overview** pane is now the sole default view (rotation
+  dropped). Two columns — pve **CPU** and ai **GPU** — each showing big USAGE %
+  and TEMP numbers, usage+temp history graphs, a memory/VRAM bar, a **LIMITING**
+  line (CPU RAPL cap proximity / GPU throttle reasons), and a prominent boxed
+  **COOLING** verdict that calls out a stopped AIO pump (`PUMP STOPPED!`) or a
+  GPU `THERMAL THROTTLE!` so a cooling failure is obvious at a glance.
+- **feat:** `video=HDMI-A-1:1920x1080@60e` documented as the host-side fix for a
+  framebuffer that won't scan out after cold-booting with no panel attached
+  (forces the display pipe up at init regardless of attach state).
+
 ## [v0.4.1] — 2026-06-27
 
 ### Fixed
