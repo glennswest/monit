@@ -34,10 +34,8 @@ pub struct GovConfig {
     pub fan_temp_hi: i32, // curve: at/above -> duty_hi
     pub fan_duty_lo: i32, // percent 0..100
     pub fan_duty_hi: i32, // percent 0..100
-    // CPU-load boost: when busy% >= load_hi, add load_boost points to the
-    // temperature-derived fan duty (spin up before the heat arrives).
-    pub load_hi: i32,    // percent 0..100; 0 disables the boost
-    pub load_boost: i32, // percent points added to fan duty when busy
+    // CPU-load trigger: at/above this busy%, slam the radiator fan to full.
+    pub load_hi: i32, // percent 0..100; 0 disables the load trigger
     pub interval_s: u64,
 }
 
@@ -125,21 +123,15 @@ fn fan_duty(cfg: &GovConfig, t: i32) -> i32 {
 
 /// Final radiator-fan duty (0..255) for a temperature and CPU busy%.
 ///
-/// Below `load_hi` (or with the boost disabled) it's just the temperature
-/// curve. At/above `load_hi` the fan gets an immediate `load_boost`-point notch
-/// on top of the curve, then ramps the rest of the way to FULL (255) as load
-/// climbs to 100% — a pinned CPU is always driven to maximum cooling, audibly,
-/// before the heat reaches the cores.
+/// At/above `load_hi`% utilization the fan is slammed to FULL (255) — a busy
+/// CPU gets maximum cooling before the heat reaches the cores. Below that (or
+/// with the load trigger disabled, `load_hi == 0`) it follows the temperature
+/// curve.
 fn fan_target(cfg: &GovConfig, t: i32, busy: i32) -> i32 {
-    let curve = fan_duty(cfg, t);
-    if cfg.load_hi <= 0 || busy < cfg.load_hi {
-        return curve;
+    if cfg.load_hi > 0 && busy >= cfg.load_hi {
+        return 255;
     }
-    let span = (100 - cfg.load_hi).max(1);
-    let frac = (busy - cfg.load_hi).clamp(0, span);
-    let notch = cfg.load_boost.max(0) * 255 / 100; // points -> PWM units
-    let base = (curve + notch).min(255);
-    (base + (255 - base) * frac / span).min(255)
+    fan_duty(cfg, t)
 }
 
 /// Spawn the governor thread if enabled. No-op otherwise.
@@ -179,9 +171,9 @@ fn gov_loop(cfg: GovConfig) {
                 write_i32(&format!("{h}/{}_enable", cfg.pump_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.pump_pwm), 255);
             }
-            // Radiator fan: temperature curve, ramped hard toward full when the
-            // CPU is busy (see fan_target). Re-assert enable+duty every tick so
-            // the Super-I/O chip can't drift the header back to its own control.
+            // Radiator fan: temperature curve, slammed to full when the CPU is
+            // busy (see fan_target). Re-assert enable+duty every tick so the
+            // Super-I/O chip can't drift the header back to its own control.
             if !cfg.fan_pwm.is_empty() && t > 0 {
                 let duty = fan_target(&cfg, t, busy);
                 write_i32(&format!("{h}/{}_enable", cfg.fan_pwm), 1);

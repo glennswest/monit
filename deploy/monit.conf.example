@@ -44,13 +44,10 @@ temp_unit = C
 #gov_temp_hi = 80
 #gov_duty_lo = 40
 #gov_duty_hi = 100
-# CPU-load boost: above gov_load_hi% utilization the radiator fan gets an
-# immediate gov_load_boost-point notch on top of the temperature curve, then
-# ramps the rest of the way to FULL (100%) as load climbs to 100% — so a pinned
-# CPU is always driven to maximum cooling before the heat arrives.
-# gov_load_hi = 0 disables the boost.
-#gov_load_hi = 75
-#gov_load_boost = 25
+# CPU-load trigger: at/above gov_load_hi% CPU utilization the radiator fan is
+# slammed to FULL speed, regardless of the temperature curve, so a busy CPU is
+# driven to maximum cooling before the heat arrives. gov_load_hi = 0 disables it.
+#gov_load_hi = 70
 # CPU temp band (°C) and floor. gov_cpu=false disables CPU throttling.
 #gov_cpu = true
 #gov_t_ok = 74
