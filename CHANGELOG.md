@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [v0.9.0] — 2026-06-29
+
+### Changed
+- The CPU-load fan boost now **ramps with utilization** instead of stepping: 0
+  added at `gov_load_hi`, climbing linearly to the full `gov_load_boost` at 100 %
+  CPU, so the radiator fan spins up harder as the cores get busier.
+
 ## [v0.8.0] — 2026-06-29
 
 ### Added
