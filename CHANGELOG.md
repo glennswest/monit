@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [v0.9.1] — 2026-06-29
+
+### Fixed
+- The radiator fan now reliably reaches **full speed** when the CPU is busy. The
+  earlier ramp-from-zero boost only nudged the duty a few percent, and on the
+  nct6798 (smoothed/laggy pwm readback) that never audibly moved the fan. The
+  load response is now a hard rule: at/above `gov_load_hi`% CPU utilization
+  (default **70**) the radiator fan is slammed to full (255), re-asserted every
+  tick so the Super-I/O chip can't drift it back, then returns to the temperature
+  curve below the threshold. Removes the unused `gov_load_boost` knob. Verified:
+  ~85 % load pins the fan to its ~1490 rpm mechanical max (vs ~900 rpm idle).
+
 ## [v0.9.0] — 2026-06-29
 
 ### Changed
