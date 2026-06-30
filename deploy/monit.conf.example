@@ -44,9 +44,10 @@ temp_unit = C
 #gov_temp_hi = 80
 #gov_duty_lo = 40
 #gov_duty_hi = 100
-# CPU-load boost: when CPU utilization >= gov_load_hi%, add gov_load_boost
-# percentage points to the temperature-derived fan duty (spin the radiator fan
-# up a notch before the heat arrives). gov_load_hi = 0 disables the boost.
+# CPU-load boost: above gov_load_hi% utilization, add an extra fan duty that
+# ramps with load — 0 added at gov_load_hi, climbing linearly to the full
+# gov_load_boost percentage points at 100% CPU (spin the radiator fan up harder
+# as the cores get busier, before the heat arrives). gov_load_hi = 0 disables it.
 #gov_load_hi = 75
 #gov_load_boost = 15
 # CPU temp band (°C) and floor. gov_cpu=false disables CPU throttling.

@@ -123,6 +123,18 @@ fn fan_duty(cfg: &GovConfig, t: i32) -> i32 {
     pct.clamp(0, 100) * 255 / 100
 }
 
+/// CPU-load fan boost in PWM units (0..255), ramping linearly from 0 at
+/// `load_hi`% up to the full `load_boost`% at 100% busy. Zero below `load_hi`
+/// or when the boost is disabled (`load_hi == 0`).
+fn load_boost(cfg: &GovConfig, busy: i32) -> i32 {
+    if cfg.load_hi <= 0 || busy < cfg.load_hi {
+        return 0;
+    }
+    let span = (100 - cfg.load_hi).max(1);
+    let frac = (busy - cfg.load_hi).clamp(0, span);
+    cfg.load_boost.max(0) * frac / span * 255 / 100
+}
+
 /// Spawn the governor thread if enabled. No-op otherwise.
 pub fn serve(cfg: GovConfig) {
     if !cfg.enabled {
@@ -160,13 +172,11 @@ fn gov_loop(cfg: GovConfig) {
                 write_i32(&format!("{h}/{}_enable", cfg.pump_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.pump_pwm), 255);
             }
-            // Radiator fan on the temperature curve, with a CPU-load boost:
-            // when busy% >= load_hi, spin up a notch before the heat arrives.
+            // Radiator fan on the temperature curve, with a CPU-load boost that
+            // ramps with utilization: nothing added at load_hi, scaling up to
+            // the full load_boost at 100% load (spin up before the heat lands).
             if !cfg.fan_pwm.is_empty() && t > 0 {
-                let mut duty = fan_duty(&cfg, t); // 0..255
-                if cfg.load_hi > 0 && busy >= cfg.load_hi {
-                    duty = (duty + cfg.load_boost.max(0) * 255 / 100).min(255);
-                }
+                let duty = (fan_duty(&cfg, t) + load_boost(&cfg, busy)).min(255);
                 write_i32(&format!("{h}/{}_enable", cfg.fan_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.fan_pwm), duty);
             }
