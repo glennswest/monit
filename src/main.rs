@@ -87,7 +87,7 @@ fn main() {
         fan_duty_lo: cfg.parse("gov_duty_lo", "MONIT_GOV_DUTY_LO", 40),
         fan_duty_hi: cfg.parse("gov_duty_hi", "MONIT_GOV_DUTY_HI", 100),
         load_hi: cfg.parse("gov_load_hi", "MONIT_GOV_LOAD_HI", 75),
-        load_boost: cfg.parse("gov_load_boost", "MONIT_GOV_LOAD_BOOST", 15),
+        load_boost: cfg.parse("gov_load_boost", "MONIT_GOV_LOAD_BOOST", 25),
         interval_s: cfg.parse("gov_interval", "MONIT_GOV_INTERVAL", 2),
     });
 

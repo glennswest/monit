@@ -123,16 +123,23 @@ fn fan_duty(cfg: &GovConfig, t: i32) -> i32 {
     pct.clamp(0, 100) * 255 / 100
 }
 
-/// CPU-load fan boost in PWM units (0..255), ramping linearly from 0 at
-/// `load_hi`% up to the full `load_boost`% at 100% busy. Zero below `load_hi`
-/// or when the boost is disabled (`load_hi == 0`).
-fn load_boost(cfg: &GovConfig, busy: i32) -> i32 {
+/// Final radiator-fan duty (0..255) for a temperature and CPU busy%.
+///
+/// Below `load_hi` (or with the boost disabled) it's just the temperature
+/// curve. At/above `load_hi` the fan gets an immediate `load_boost`-point notch
+/// on top of the curve, then ramps the rest of the way to FULL (255) as load
+/// climbs to 100% — a pinned CPU is always driven to maximum cooling, audibly,
+/// before the heat reaches the cores.
+fn fan_target(cfg: &GovConfig, t: i32, busy: i32) -> i32 {
+    let curve = fan_duty(cfg, t);
     if cfg.load_hi <= 0 || busy < cfg.load_hi {
-        return 0;
+        return curve;
     }
     let span = (100 - cfg.load_hi).max(1);
     let frac = (busy - cfg.load_hi).clamp(0, span);
-    cfg.load_boost.max(0) * frac / span * 255 / 100
+    let notch = cfg.load_boost.max(0) * 255 / 100; // points -> PWM units
+    let base = (curve + notch).min(255);
+    (base + (255 - base) * frac / span).min(255)
 }
 
 /// Spawn the governor thread if enabled. No-op otherwise.
@@ -172,11 +179,11 @@ fn gov_loop(cfg: GovConfig) {
                 write_i32(&format!("{h}/{}_enable", cfg.pump_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.pump_pwm), 255);
             }
-            // Radiator fan on the temperature curve, with a CPU-load boost that
-            // ramps with utilization: nothing added at load_hi, scaling up to
-            // the full load_boost at 100% load (spin up before the heat lands).
+            // Radiator fan: temperature curve, ramped hard toward full when the
+            // CPU is busy (see fan_target). Re-assert enable+duty every tick so
+            // the Super-I/O chip can't drift the header back to its own control.
             if !cfg.fan_pwm.is_empty() && t > 0 {
-                let duty = (fan_duty(&cfg, t) + load_boost(&cfg, busy)).min(255);
+                let duty = fan_target(&cfg, t, busy);
                 write_i32(&format!("{h}/{}_enable", cfg.fan_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.fan_pwm), duty);
             }
