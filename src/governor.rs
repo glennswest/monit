@@ -34,6 +34,10 @@ pub struct GovConfig {
     pub fan_temp_hi: i32, // curve: at/above -> duty_hi
     pub fan_duty_lo: i32, // percent 0..100
     pub fan_duty_hi: i32, // percent 0..100
+    // CPU-load boost: when busy% >= load_hi, add load_boost points to the
+    // temperature-derived fan duty (spin up before the heat arrives).
+    pub load_hi: i32,    // percent 0..100; 0 disables the boost
+    pub load_boost: i32, // percent points added to fan duty when busy
     pub interval_s: u64,
 }
 
@@ -54,6 +58,33 @@ fn nct_dir() -> Option<String> {
         }
     }
     None
+}
+
+/// Cumulative (busy, total) CPU jiffies from the `cpu` line of /proc/stat.
+fn cpu_jiffies() -> Option<(u64, u64)> {
+    let stat = fs::read_to_string("/proc/stat").ok()?;
+    let line = stat.lines().next()?; // aggregate "cpu  ..." line
+    let vals: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|v| v.parse().ok())
+        .collect();
+    if vals.len() < 4 {
+        return None;
+    }
+    let total: u64 = vals.iter().sum();
+    let idle = vals[3] + vals.get(4).copied().unwrap_or(0); // idle + iowait
+    Some((total.saturating_sub(idle), total))
+}
+
+/// Busy CPU percent (0..100) between two /proc/stat snapshots.
+fn cpu_busy_pct(prev: (u64, u64), now: (u64, u64)) -> i32 {
+    let dt = now.1.saturating_sub(prev.1);
+    if dt == 0 {
+        return 0;
+    }
+    let db = now.0.saturating_sub(prev.0);
+    (db.saturating_mul(100) / dt) as i32
 }
 
 /// Hottest coretemp core in whole °C (0 if no coretemp sensors).
@@ -103,6 +134,7 @@ pub fn serve(cfg: GovConfig) {
 fn gov_loop(cfg: GovConfig) {
     let nct = nct_dir();
     let mut cur = read_i32(PCT).unwrap_or(100);
+    let mut prev_cpu = cpu_jiffies();
     eprintln!(
         "monit: thermal governor active (nct={}, pstate={}%, pump={}, fan={})",
         nct.is_some(), cur, cfg.pump_pwm, cfg.fan_pwm
@@ -110,15 +142,31 @@ fn gov_loop(cfg: GovConfig) {
     loop {
         let t = hottest_core();
 
+        // CPU busy% across this interval (0 until we have two samples).
+        let busy = match (prev_cpu, cpu_jiffies()) {
+            (Some(p), Some(n)) => {
+                prev_cpu = Some(n);
+                cpu_busy_pct(p, n)
+            }
+            (_, n) => {
+                prev_cpu = n;
+                0
+            }
+        };
+
         if let Some(ref h) = nct {
             // Pump always full — never throttle the coolant flow.
             if !cfg.pump_pwm.is_empty() {
                 write_i32(&format!("{h}/{}_enable", cfg.pump_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.pump_pwm), 255);
             }
-            // Radiator fan on the temperature curve.
+            // Radiator fan on the temperature curve, with a CPU-load boost:
+            // when busy% >= load_hi, spin up a notch before the heat arrives.
             if !cfg.fan_pwm.is_empty() && t > 0 {
-                let duty = fan_duty(&cfg, t);
+                let mut duty = fan_duty(&cfg, t); // 0..255
+                if cfg.load_hi > 0 && busy >= cfg.load_hi {
+                    duty = (duty + cfg.load_boost.max(0) * 255 / 100).min(255);
+                }
                 write_i32(&format!("{h}/{}_enable", cfg.fan_pwm), 1);
                 write_i32(&format!("{h}/{}", cfg.fan_pwm), duty);
             }

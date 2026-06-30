@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### 2026-06-29
+- **feat:** Thermal governor now boosts the radiator fan on CPU load — when CPU
+  utilization reaches `gov_load_hi`% (default 75), it adds `gov_load_boost`
+  percentage points (default 15) to the temperature-derived fan duty, spinning
+  the fan up a notch before the heat reaches the cores. Reads busy% from
+  `/proc/stat`; `gov_load_hi = 0` disables the boost.
+
 ## [v0.7.0] — 2026-06-27
 
 ### Added
